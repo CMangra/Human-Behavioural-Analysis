@@ -45,17 +45,18 @@ def compute_kinematics(frames_dict):
         cumulative_turn = np.sum(smoothed_ang_vel[start_idx:end_idx])
 
         if cumulative_turn >= config.TURN_CUMULATIVE_DEG:
-            # S-CURVE FIX: Find the lowest point (valley) between the last turn and this turn
             valley_idx = last_peak_idx + np.argmin(smoothed_ang_vel[last_peak_idx:peak_idx + 1])
-
             onset_idx = peak_idx
+
             # Backtrack until we hit the noise floor OR the valley
             while onset_idx > valley_idx and smoothed_ang_vel[onset_idx] > config.TURN_NOISE_FLOOR_DEG:
                 onset_idx -= 1
 
-            if (onset_idx - last_onset_idx) > config.TURN_DEBOUNCE_FRAMES:
-                onset_indices.append(onset_idx)
-                last_onset_idx = onset_idx
+            # NEW STRICT RULE: The Onset MUST have successfully touched the Noise Floor!
+            if smoothed_ang_vel[onset_idx] <= config.TURN_NOISE_FLOOR_DEG:
+                if (onset_idx - last_onset_idx) > config.TURN_DEBOUNCE_FRAMES:
+                    onset_indices.append(onset_idx)
+                    last_onset_idx = onset_idx
 
             last_peak_idx = peak_idx
 

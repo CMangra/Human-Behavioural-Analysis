@@ -1,10 +1,13 @@
 import os
-import json
 import cv2
 import numpy as np
 import torch
 
 from visualizations.smpl_video_annotator import load_smpl_params
+from data_analysis.timestamp_utils import (
+    relative_time_seconds,
+    frame_time_seconds,
+)
 
 
 # =============================================================================
@@ -27,14 +30,14 @@ SMPL_HEAD_INDEX = 15
 SMPL_LEFT_SHOULDER_INDEX = 16
 SMPL_RIGHT_SHOULDER_INDEX = 17
 
-HEAD_AXIS_CANDIDATES = [
-    np.array([1.0, 0.0, 0.0]),
-    np.array([-1.0, 0.0, 0.0]),
-    np.array([0.0, 1.0, 0.0]),
-    np.array([0.0, -1.0, 0.0]),
-    np.array([0.0, 0.0, 1.0]),
-    np.array([0.0, 0.0, -1.0]),
-]
+HEAD_AXES = {
+    "+X": np.array([1.0, 0.0, 0.0]),
+    "-X": np.array([-1.0, 0.0, 0.0]),
+    "+Y": np.array([0.0, 1.0, 0.0]),
+    "-Y": np.array([0.0, -1.0, 0.0]),
+    "+Z": np.array([0.0, 0.0, 1.0]),
+    "-Z": np.array([0.0, 0.0, -1.0]),
+}
 
 
 def normalize_2d(v, eps=1e-9):
@@ -49,11 +52,11 @@ def normalize_2d(v, eps=1e-9):
 
 def signed_deviation_deg(reference_dir, target_dir):
     """
-    Signed yaw deviation in degrees.
+    Signed yaw deviation.
 
     Convention:
-        left relative to walking direction  -> negative
-        right relative to walking direction -> positive
+        left relative to reference direction  -> negative
+        right relative to reference direction -> positive
     """
     ref = normalize_2d(reference_dir)
     tgt = normalize_2d(target_dir)
@@ -64,9 +67,8 @@ def signed_deviation_deg(reference_dir, target_dir):
     cross_z = ref[0] * tgt[1] - ref[1] * tgt[0]
     dot = np.clip(np.dot(ref, tgt), -1.0, 1.0)
 
-    angle_rad = np.arctan2(cross_z, dot)
-
-    return -np.degrees(angle_rad)
+    angle = np.degrees(np.arctan2(cross_z, dot))
+    return -angle
 
 
 def axis_angle_to_rotmat(axis_angle):
@@ -75,32 +77,26 @@ def axis_angle_to_rotmat(axis_angle):
 
 
 def compute_global_rotations_from_pose(pose_72):
-    """
-    Converts SMPL local axis-angle pose parameters into global joint rotations.
-    """
-    local_rotations = []
+    local_rots = []
 
     for i in range(24):
         aa = pose_72[i * 3:(i + 1) * 3]
-        local_rotations.append(axis_angle_to_rotmat(aa))
+        local_rots.append(axis_angle_to_rotmat(aa))
 
-    global_rotations = [None] * 24
+    global_rots = [None] * 24
 
     for i in range(24):
         parent = SMPL_PARENT[i]
 
         if parent < 0:
-            global_rotations[i] = local_rotations[i]
+            global_rots[i] = local_rots[i]
         else:
-            global_rotations[i] = global_rotations[parent] @ local_rotations[i]
+            global_rots[i] = global_rots[parent] @ local_rots[i]
 
-    return global_rotations
+    return global_rots
 
 
 def smpl_forward_joints(model, betas, pose, trans, device):
-    """
-    Runs SMPL forward pass and returns joints only.
-    """
     betas_t = torch.tensor(betas.reshape(1, 10), dtype=torch.float32, device=device)
     global_orient_t = torch.tensor(pose[:3].reshape(1, 3), dtype=torch.float32, device=device)
     body_pose_t = torch.tensor(pose[3:].reshape(1, 69), dtype=torch.float32, device=device)
@@ -118,72 +114,6 @@ def smpl_forward_joints(model, betas, pose, trans, device):
     return output.joints.detach().cpu().numpy()[0]
 
 
-def compute_walking_direction_from_kinematics(kinematics, frame_id, past_frames):
-    """
-    Uses the existing centralized Step 2 smoothed trajectory.
-
-    Direction at frame f:
-        vector from smoothed position at f - past_frames to smoothed position at f.
-    """
-    sorted_frames = kinematics["sorted_frames"]
-    xs = kinematics["xs"]
-    ys = kinematics["ys"]
-
-    if frame_id not in sorted_frames:
-        return None
-
-    idx = sorted_frames.index(frame_id)
-    past_idx = idx - past_frames
-
-    if past_idx < 0:
-        return None
-
-    p_now = np.array([xs[idx], ys[idx]], dtype=float)
-    p_past = np.array([xs[past_idx], ys[past_idx]], dtype=float)
-
-    return normalize_2d(p_now - p_past)
-
-
-def choose_head_forward_axis(rows):
-    """
-    Calibrates which SMPL head local axis is most likely face-forward.
-
-    We choose the candidate axis that most often aligns with the person's walking
-    direction across the available track.
-    """
-    best_axis = HEAD_AXIS_CANDIDATES[0]
-    best_score = -np.inf
-
-    for axis in HEAD_AXIS_CANDIDATES:
-        scores = []
-
-        for row in rows:
-            walking_dir = row.get("walking_dir")
-            head_global_rot = row.get("head_global_rot")
-
-            if walking_dir is None or head_global_rot is None:
-                continue
-
-            candidate_3d = head_global_rot @ axis
-            candidate_2d = normalize_2d(candidate_3d[:2])
-
-            if candidate_2d is None:
-                continue
-
-            scores.append(np.dot(walking_dir, candidate_2d))
-
-        if not scores:
-            continue
-
-        score = float(np.nanmean(scores))
-
-        if score > best_score:
-            best_score = score
-            best_axis = axis
-
-    return best_axis, best_score
-
-
 def build_smpl_json_path(data_dir, sequence, frame_id, tid):
     return os.path.join(
         data_dir,
@@ -191,139 +121,166 @@ def build_smpl_json_path(data_dir, sequence, frame_id, tid):
         "3d",
         "smpl",
         sequence,
-        f"{sequence}_{frame_id:07d}_{tid}.json"
+        f"{sequence}_{frame_id:07d}_{tid}.json",
     )
 
 
-def compute_smpl_orientation_track(
-    data_dir,
-    sequence,
-    tid,
+def get_kinematic_index(kinematics, frame_id):
+    sorted_frames = kinematics["sorted_frames"]
+
+    if frame_id not in sorted_frames:
+        return None
+
+    return sorted_frames.index(frame_id)
+
+
+def walking_dir_past_seconds(kinematics, frame_id, past_seconds, frame_to_time):
+    """
+    Walking direction using real timestamp duration.
+
+    Finds the frame closest to current_time - past_seconds, then computes
+    displacement from that frame to the current frame.
+    """
+    sorted_frames = np.asarray(kinematics["sorted_frames"], dtype=int)
+    xs = np.asarray(kinematics["xs"], dtype=float)
+    ys = np.asarray(kinematics["ys"], dtype=float)
+
+    if frame_id not in sorted_frames:
+        return None
+
+    idx = list(sorted_frames).index(frame_id)
+
+    current_t = frame_time_seconds(frame_id, frame_to_time)
+    target_t = current_t - past_seconds
+
+    candidate_indices = [
+        i for i, f in enumerate(sorted_frames)
+        if frame_time_seconds(int(f), frame_to_time) <= target_t
+    ]
+
+    if not candidate_indices:
+        return None
+
+    past_idx = candidate_indices[-1]
+
+    p_now = np.array([xs[idx], ys[idx]], dtype=float)
+    p_past = np.array([xs[past_idx], ys[past_idx]], dtype=float)
+
+    return normalize_2d(p_now - p_past)
+
+
+def walking_dir_smoothed_tangent(kinematics, frame_id):
+    idx = get_kinematic_index(kinematics, frame_id)
+
+    if idx is None:
+        return None
+
+    xs = kinematics["xs"]
+    ys = kinematics["ys"]
+
+    if idx <= 0 or idx >= len(xs) - 1:
+        return None
+
+    p_prev = np.array([xs[idx - 1], ys[idx - 1]], dtype=float)
+    p_next = np.array([xs[idx + 1], ys[idx + 1]], dtype=float)
+
+    return normalize_2d(p_next - p_prev)
+
+
+def stable_pre_turn_heading(
     kinematics,
-    smpl_model,
-    device,
-    past_frames,
+    onset_frame,
+    baseline_start_s,
+    baseline_end_s,
+    frame_to_time,
 ):
     """
-    Computes head and shoulder deviation for all frames where both:
-        - Step 2 trajectory exists
-        - official PedX SMPL JSON exists
+    Fixed event-level walking reference using timestamps.
 
-    It deliberately reuses Step 2 kinematics for walking direction.
+    Uses displacement between average position near baseline start and average
+    position near baseline end.
     """
-    sorted_frames = kinematics["sorted_frames"]
+    sorted_frames = np.asarray(kinematics["sorted_frames"], dtype=int)
+    xs = np.asarray(kinematics["xs"], dtype=float)
+    ys = np.asarray(kinematics["ys"], dtype=float)
 
-    rows = []
+    times = np.array([
+        relative_time_seconds(int(f), onset_frame, frame_to_time)
+        for f in sorted_frames
+    ], dtype=float)
 
-    for frame_id in sorted_frames:
-        json_path = build_smpl_json_path(data_dir, sequence, frame_id, tid)
+    start_mask = (times >= baseline_start_s) & (times <= baseline_start_s + 0.5)
+    end_mask = (times >= baseline_end_s - 0.5) & (times <= baseline_end_s)
 
-        if not os.path.exists(json_path):
+    if np.sum(start_mask) < 2 or np.sum(end_mask) < 2:
+        return None
+
+    p_start = np.array([np.nanmean(xs[start_mask]), np.nanmean(ys[start_mask])])
+    p_end = np.array([np.nanmean(xs[end_mask]), np.nanmean(ys[end_mask])])
+
+    return normalize_2d(p_end - p_start)
+
+
+def baseline_correct(values, times, baseline_start_s, baseline_end_s):
+    values = np.asarray(values, dtype=float)
+    times = np.asarray(times, dtype=float)
+
+    mask = (
+        np.isfinite(values)
+        & (times >= baseline_start_s)
+        & (times <= baseline_end_s)
+    )
+
+    if np.sum(mask) < 3:
+        return values, np.nan
+
+    baseline = np.nanmean(values[mask])
+    return values - baseline, baseline
+
+
+def choose_best_head_axis_by_stability(rows, times, baseline_start_s, baseline_end_s):
+    """
+    Chooses head axis with lowest baseline standard deviation.
+
+    This is diagnostic only. It does not prove anatomical gaze direction.
+    """
+    best_axis = None
+    best_score = np.inf
+
+    baseline_mask = (times >= baseline_start_s) & (times <= baseline_end_s)
+
+    for axis_name in HEAD_AXES.keys():
+        values = np.array([r[f"head_{axis_name}_stable"] for r in rows], dtype=float)
+        vals = values[baseline_mask & np.isfinite(values)]
+
+        if len(vals) < 3:
             continue
 
-        betas, pose, trans = load_smpl_params(json_path)
-        joints = smpl_forward_joints(
-            model=smpl_model,
-            betas=betas,
-            pose=pose,
-            trans=trans,
-            device=device,
-        )
+        score = np.nanstd(vals)
 
-        walking_dir = compute_walking_direction_from_kinematics(
-            kinematics=kinematics,
-            frame_id=frame_id,
-            past_frames=past_frames,
-        )
+        if score < best_score:
+            best_score = score
+            best_axis = axis_name
 
-        global_rots = compute_global_rotations_from_pose(pose)
-        head_global_rot = global_rots[SMPL_HEAD_INDEX]
-
-        left_shoulder = joints[SMPL_LEFT_SHOULDER_INDEX]
-        right_shoulder = joints[SMPL_RIGHT_SHOULDER_INDEX]
-
-        shoulder_line_2d = normalize_2d((right_shoulder - left_shoulder)[:2])
-
-        shoulder_forward = None
-
-        if shoulder_line_2d is not None and walking_dir is not None:
-            normal_1 = np.array([-shoulder_line_2d[1], shoulder_line_2d[0]])
-            normal_2 = -normal_1
-
-            # Pick the normal that generally faces the walking direction.
-            if np.dot(normal_1, walking_dir) >= np.dot(normal_2, walking_dir):
-                shoulder_forward = normal_1
-            else:
-                shoulder_forward = normal_2
-
-        rows.append({
-            "frame": frame_id,
-            "walking_dir": walking_dir,
-            "head_global_rot": head_global_rot,
-            "shoulder_forward": shoulder_forward,
-        })
-
-    head_axis, head_axis_score = choose_head_forward_axis(rows)
-
-    final_rows = []
-
-    for row in rows:
-        walking_dir = row["walking_dir"]
-
-        if walking_dir is None:
-            head_dev = np.nan
-            shoulder_dev = np.nan
-        else:
-            head_vec_3d = row["head_global_rot"] @ head_axis
-            head_vec_2d = normalize_2d(head_vec_3d[:2])
-
-            if head_vec_2d is None:
-                head_dev = np.nan
-            else:
-                head_dev = signed_deviation_deg(walking_dir, head_vec_2d)
-
-            shoulder_forward = row["shoulder_forward"]
-
-            if shoulder_forward is None:
-                shoulder_dev = np.nan
-            else:
-                shoulder_dev = signed_deviation_deg(walking_dir, shoulder_forward)
-
-        final_rows.append({
-            "frame": row["frame"],
-            "head_deviation_deg": head_dev,
-            "shoulder_deviation_deg": shoulder_dev,
-        })
-
-    return final_rows, head_axis, head_axis_score
+    return best_axis, best_score
 
 
-def get_angular_velocity_frame_series_from_kinematics(kinematics):
+def angular_velocity_frame_series_from_kinematics(kinematics):
     """
-    Reuses the exact angular velocity sequence from Step 2.
+    Reuses Step 2 angular velocity values.
 
-    In turn_detection.compute_kinematics:
-        smoothed_ang_vel index i corresponds visually to sorted_frames[i + 1]
-        as used in turn_math_debugger.py.
+    Note:
+        Values are degrees/frame because compute_kinematics() computes heading
+        change per frame, not per timestamp-second.
     """
-    sorted_frames = kinematics["sorted_frames"]
-    smoothed_ang_vel = kinematics["smoothed_ang_vel"]
-
-    frames = np.array(sorted_frames[1:-1], dtype=int)
-    values = np.asarray(smoothed_ang_vel, dtype=float)
+    frames = np.asarray(kinematics["sorted_frames"][1:-1], dtype=int)
+    values = np.asarray(kinematics["smoothed_ang_vel"], dtype=float)
 
     n = min(len(frames), len(values))
-
     return frames[:n], values[:n]
 
 
-def get_peak_frame_for_onset(kinematics, onset_frame):
-    """
-    Reuses Step 2 detected peaks.
-
-    Selects the first peak after the onset frame. If no peak after onset exists,
-    returns the nearest detected peak.
-    """
+def peak_frame_after_onset(kinematics, onset_frame):
     sorted_frames = kinematics["sorted_frames"]
     peaks = kinematics["peaks"]
 
@@ -347,3 +304,196 @@ def get_peak_frame_for_onset(kinematics, onset_frame):
         return min(after)
 
     return min(peak_frames, key=lambda f: abs(f - onset_frame))
+
+
+def compute_event_orientation_sensitivity(
+    data_dir,
+    sequence,
+    tid,
+    onset_frame,
+    kinematics,
+    smpl_model,
+    device,
+    frame_to_time,
+    pre_seconds=4.0,
+    post_seconds=3.0,
+    baseline_start_s=-3.0,
+    baseline_end_s=-1.5,
+):
+    """
+    Computes timestamp-aware Step 5 orientation sensitivity for one turn event.
+
+    Output contains:
+        - event dataframe
+        - selected head axis
+        - peak frame/time
+        - angular velocity arrays for plotting
+    """
+    peak_frame = peak_frame_after_onset(kinematics, onset_frame)
+
+    stable_heading = stable_pre_turn_heading(
+        kinematics=kinematics,
+        onset_frame=onset_frame,
+        baseline_start_s=baseline_start_s,
+        baseline_end_s=baseline_end_s,
+        frame_to_time=frame_to_time,
+    )
+
+    if stable_heading is None:
+        return None
+
+    frames = [
+        f for f in kinematics["sorted_frames"]
+        if -pre_seconds <= relative_time_seconds(f, onset_frame, frame_to_time) <= post_seconds
+    ]
+
+    if not frames:
+        return None
+
+    start_frame = min(frames)
+    end_frame = max(frames)
+
+    rows = []
+
+    for frame_id in frames:
+        json_path = build_smpl_json_path(data_dir, sequence, frame_id, tid)
+
+        if not os.path.exists(json_path):
+            continue
+
+        betas, pose, trans = load_smpl_params(json_path)
+        joints = smpl_forward_joints(smpl_model, betas, pose, trans, device)
+
+        global_rots = compute_global_rotations_from_pose(pose)
+        head_rot = global_rots[SMPL_HEAD_INDEX]
+
+        left_shoulder = joints[SMPL_LEFT_SHOULDER_INDEX]
+        right_shoulder = joints[SMPL_RIGHT_SHOULDER_INDEX]
+        shoulder_line = normalize_2d((right_shoulder - left_shoulder)[:2])
+
+        time_s = relative_time_seconds(frame_id, onset_frame, frame_to_time)
+
+        row = {
+            "frame": frame_id,
+            "time_s": time_s,
+        }
+
+        walk_refs = {
+            "stable": stable_heading,
+            "past_05s": walking_dir_past_seconds(kinematics, frame_id, 0.5, frame_to_time),
+            "past_10s": walking_dir_past_seconds(kinematics, frame_id, 1.0, frame_to_time),
+            "past_15s": walking_dir_past_seconds(kinematics, frame_id, 1.5, frame_to_time),
+            "tangent": walking_dir_smoothed_tangent(kinematics, frame_id),
+        }
+
+        for ref_name, ref_dir in walk_refs.items():
+            if shoulder_line is None or ref_dir is None:
+                row[f"shoulder_{ref_name}"] = np.nan
+            else:
+                normal_1 = np.array([-shoulder_line[1], shoulder_line[0]])
+                normal_2 = -normal_1
+
+                shoulder_forward = (
+                    normal_1
+                    if np.dot(normal_1, ref_dir) >= np.dot(normal_2, ref_dir)
+                    else normal_2
+                )
+
+                row[f"shoulder_{ref_name}"] = signed_deviation_deg(ref_dir, shoulder_forward)
+
+        for axis_name, axis_vec in HEAD_AXES.items():
+            head_vec_3d = head_rot @ axis_vec
+            head_vec_2d = normalize_2d(head_vec_3d[:2])
+
+            for ref_name, ref_dir in walk_refs.items():
+                key = f"head_{axis_name}_{ref_name}"
+
+                if head_vec_2d is None or ref_dir is None:
+                    row[key] = np.nan
+                else:
+                    row[key] = signed_deviation_deg(ref_dir, head_vec_2d)
+
+        rows.append(row)
+
+    if not rows:
+        return None
+
+    times = np.array([r["time_s"] for r in rows], dtype=float)
+
+    best_head_axis, best_head_axis_score = choose_best_head_axis_by_stability(
+        rows=rows,
+        times=times,
+        baseline_start_s=baseline_start_s,
+        baseline_end_s=baseline_end_s,
+    )
+
+    if best_head_axis is None:
+        best_head_axis = "+Z"
+        best_head_axis_score = np.nan
+
+    event_df = np_to_event_dataframe(
+        rows=rows,
+        times=times,
+        best_head_axis=best_head_axis,
+        baseline_start_s=baseline_start_s,
+        baseline_end_s=baseline_end_s,
+    )
+
+    av_frames, av_values = angular_velocity_frame_series_from_kinematics(kinematics)
+    av_mask = (av_frames >= start_frame) & (av_frames <= end_frame)
+
+    av_times = np.array([
+        relative_time_seconds(int(f), onset_frame, frame_to_time)
+        for f in av_frames[av_mask]
+    ], dtype=float)
+
+    av_values = av_values[av_mask]
+
+    peak_time = None
+    if peak_frame is not None:
+        peak_time = relative_time_seconds(peak_frame, onset_frame, frame_to_time)
+
+    return {
+        "event_df": event_df,
+        "best_head_axis": best_head_axis,
+        "best_head_axis_score": best_head_axis_score,
+        "peak_frame": peak_frame,
+        "peak_time": peak_time,
+        "av_times": av_times,
+        "av_values": av_values,
+        "stable_heading": stable_heading,
+    }
+
+
+def np_to_event_dataframe(rows, times, best_head_axis, baseline_start_s, baseline_end_s):
+    data = {
+        "frame": np.array([r["frame"] for r in rows], dtype=int),
+        "time_seconds_relative_to_onset_from_timestamps": times,
+    }
+
+    for ref_name in ["stable", "past_05s", "past_10s", "past_15s", "tangent"]:
+        head_values = np.array([r[f"head_{best_head_axis}_{ref_name}"] for r in rows], dtype=float)
+        shoulder_values = np.array([r[f"shoulder_{ref_name}"] for r in rows], dtype=float)
+
+        head_corrected, head_baseline = baseline_correct(
+            head_values,
+            times,
+            baseline_start_s,
+            baseline_end_s,
+        )
+
+        shoulder_corrected, shoulder_baseline = baseline_correct(
+            shoulder_values,
+            times,
+            baseline_start_s,
+            baseline_end_s,
+        )
+
+        data[f"head_{best_head_axis}_{ref_name}_baseline_corrected_deg"] = head_corrected
+        data[f"head_{best_head_axis}_{ref_name}_baseline_deg"] = np.full_like(times, head_baseline, dtype=float)
+
+        data[f"shoulder_{ref_name}_baseline_corrected_deg"] = shoulder_corrected
+        data[f"shoulder_{ref_name}_baseline_deg"] = np.full_like(times, shoulder_baseline, dtype=float)
+
+    import pandas as pd
+    return pd.DataFrame(data)
