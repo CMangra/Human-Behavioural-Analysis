@@ -20,8 +20,6 @@ if str(ANALYSIS_ROOT) not in sys.path:
 from data_analysis.pedestrian_filtering import filter_pedestrians_by_visibility
 from data_analysis.turn_detection import detect_multiple_turns_with_onset, compute_kinematics
 from visualizations.smpl_video_annotator import load_smpl_model, load_smpl_params
-
-
 # =============================================================================
 # CONFIG
 # =============================================================================
@@ -32,9 +30,6 @@ DATASET_DIR = WORKSPACE_ROOT / r"downloaded_stuff\datasets\pedx\pedx_data"
 
 SEQUENCE = "20171207T2024"
 
-# Fallback only.
-# Real time is loaded from PedX timestamp files.
-# If timestamps are unavailable, time falls back to frame_difference / FALLBACK_FPS.
 FALLBACK_FPS = 10
 
 PRE_SECONDS = 4.0
@@ -46,7 +41,7 @@ BASELINE_END_S = -1.5
 OUTPUT_DIR = (
     REPO_ROOT
     / "visualisation_human_skeleton_visualisation_analysis"
-    / "temp_step5_diagnostics_all_events_clean_timestamps"
+    / "temp_step5_diagnostics_separate_figures"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -59,13 +54,6 @@ SMPL_DIR = DATASET_DIR / "labels" / "3d" / "smpl" / SEQUENCE
 # =============================================================================
 
 def find_timestamp_file(dataset_dir, sequence):
-    """
-    Finds the PedX image timestamp file for a sequence.
-
-    Handles possible extraction layouts:
-        pedx_data/timestamps/timestamps-images-SEQ.txt
-        pedx_data/timestamps/timestamps/timestamps-images-SEQ.txt
-    """
     candidates = [
         dataset_dir / "timestamps" / f"timestamps-images-{sequence}.txt",
         dataset_dir / "timestamps" / "timestamps" / f"timestamps-images-{sequence}.txt",
@@ -79,22 +67,6 @@ def find_timestamp_file(dataset_dir, sequence):
 
 
 def load_frame_timestamps(dataset_dir, sequence):
-    """
-    Loads PedX frame timestamps.
-
-    The parser is intentionally robust because timestamp text formats may vary.
-
-    Supported line examples:
-        0000055 151269...
-        55 151269...
-        20171207T2024_blu79CF_0000055.jpg 151269...
-        20171207T2024_0000055 151269...
-
-    Returns:
-        dict: frame_id -> timestamp_seconds
-
-    If no timestamp file is found or parsed, returns None.
-    """
     timestamp_file = find_timestamp_file(dataset_dir, sequence)
 
     if timestamp_file is None:
@@ -115,7 +87,6 @@ def load_frame_timestamps(dataset_dir, sequence):
 
             parts = line.replace(",", " ").split()
 
-            # Find frame id candidate
             frame_id = None
 
             for token in parts:
@@ -127,17 +98,13 @@ def load_frame_timestamps(dataset_dir, sequence):
                     .replace(".txt", "")
                 )
 
-                subparts = token_clean.split("_")
-
-                for sp in subparts:
+                for sp in token_clean.split("_"):
                     if sp.isdigit() and len(sp) <= 7:
                         try:
-                            candidate = int(sp)
-                            frame_id = candidate
+                            frame_id = int(sp)
                         except ValueError:
                             pass
 
-            # Find timestamp candidate: usually the last parseable float.
             timestamp = None
             for token in reversed(parts):
                 try:
@@ -156,7 +123,6 @@ def load_frame_timestamps(dataset_dir, sequence):
         print("[TIMESTAMPS][WARN] Falling back to frame/FALLBACK_FPS.")
         return None
 
-    # Normalize to seconds if timestamps are in ms/us/ns.
     values = np.array(list(frame_to_time.values()), dtype=float)
     sorted_values = np.sort(values)
 
@@ -166,15 +132,12 @@ def load_frame_timestamps(dataset_dir, sequence):
         median_step = 0.1
 
     if median_step > 1e6:
-        # likely nanoseconds
         frame_to_time = {k: v / 1e9 for k, v in frame_to_time.items()}
         unit = "nanoseconds -> seconds"
     elif median_step > 1e3:
-        # likely microseconds
         frame_to_time = {k: v / 1e6 for k, v in frame_to_time.items()}
         unit = "microseconds -> seconds"
     elif median_step > 1:
-        # likely milliseconds
         frame_to_time = {k: v / 1e3 for k, v in frame_to_time.items()}
         unit = "milliseconds -> seconds"
     else:
@@ -197,10 +160,6 @@ def load_frame_timestamps(dataset_dir, sequence):
 
 
 def frame_time_seconds(frame_id, frame_to_time):
-    """
-    Absolute timestamp in seconds for a frame.
-    Falls back to frame_id / FALLBACK_FPS if timestamps are unavailable.
-    """
     if frame_to_time is not None and int(frame_id) in frame_to_time:
         return frame_to_time[int(frame_id)]
 
@@ -208,9 +167,6 @@ def frame_time_seconds(frame_id, frame_to_time):
 
 
 def relative_time_seconds(frame_id, onset_frame, frame_to_time):
-    """
-    Time relative to onset in real seconds.
-    """
     return frame_time_seconds(frame_id, frame_to_time) - frame_time_seconds(onset_frame, frame_to_time)
 
 
@@ -234,8 +190,6 @@ SMPL_HEAD_INDEX = 15
 SMPL_LEFT_SHOULDER_INDEX = 16
 SMPL_RIGHT_SHOULDER_INDEX = 17
 
-# Candidate local axes for head direction.
-# These are used only to select one stable diagnostic head axis.
 HEAD_AXES = {
     "+X": np.array([1.0, 0.0, 0.0]),
     "-X": np.array([-1.0, 0.0, 0.0]),
@@ -261,13 +215,6 @@ def normalize_2d(v, eps=1e-9):
 
 
 def signed_deviation_deg(reference_dir, target_dir):
-    """
-    Signed yaw deviation.
-
-    Convention:
-        left relative to reference direction  -> negative
-        right relative to reference direction -> positive
-    """
     ref = normalize_2d(reference_dir)
     tgt = normalize_2d(target_dir)
 
@@ -352,12 +299,6 @@ def get_kinematic_index(kinematics, frame_id):
 
 
 def walking_dir_past_seconds(kinematics, frame_id, past_seconds, frame_to_time):
-    """
-    Walking direction using real timestamp duration.
-
-    Finds the frame closest to current_time - past_seconds, then computes
-    displacement from that frame to the current frame.
-    """
     sorted_frames = np.asarray(kinematics["sorted_frames"], dtype=int)
     xs = np.asarray(kinematics["xs"], dtype=float)
     ys = np.asarray(kinematics["ys"], dtype=float)
@@ -408,12 +349,6 @@ def walking_dir_smoothed_tangent(kinematics, frame_id):
 
 
 def stable_pre_turn_heading(kinematics, onset_frame, start_s, end_s, frame_to_time):
-    """
-    Fixed event-level walking reference using real timestamps.
-
-    Uses displacement between average position near baseline start and average
-    position near baseline end, both relative to onset time.
-    """
     sorted_frames = np.asarray(kinematics["sorted_frames"], dtype=int)
     xs = np.asarray(kinematics["xs"], dtype=float)
     ys = np.asarray(kinematics["ys"], dtype=float)
@@ -436,13 +371,6 @@ def stable_pre_turn_heading(kinematics, onset_frame, start_s, end_s, frame_to_ti
 
 
 def angular_velocity_series_from_kinematics(kinematics):
-    """
-    Reuses Step 2 angular velocity values.
-
-    Note:
-        Values are still degrees/frame because compute_kinematics() computes
-        angular velocity from frame-to-frame heading changes without timestamp normalization.
-    """
     frames = np.asarray(kinematics["sorted_frames"][1:-1], dtype=int)
     values = np.asarray(kinematics["smoothed_ang_vel"], dtype=float)
 
@@ -494,10 +422,6 @@ def baseline_correct(values, times, start_s=BASELINE_START_S, end_s=BASELINE_END
 
 
 def choose_best_head_axis_by_stability(rows, times):
-    """
-    Chooses head axis with lowest baseline standard deviation.
-    This is diagnostic only; it does not prove anatomical gaze direction.
-    """
     best_axis = None
     best_score = np.inf
 
@@ -520,11 +444,177 @@ def choose_best_head_axis_by_stability(rows, times):
 
 
 # =============================================================================
+# PLOTTING HELPERS
+# =============================================================================
+
+def save_figure(fig, base_path):
+    png_path = Path(str(base_path) + ".png")
+    svg_path = Path(str(base_path) + ".svg")
+
+    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    fig.savefig(svg_path, format="svg", bbox_inches="tight")
+
+    plt.close(fig)
+
+    return png_path, svg_path
+
+
+def plot_bev_trajectory(
+    tid,
+    short_id,
+    onset_frame,
+    peak_frame,
+    kinematics,
+    stable_heading,
+    person_output_dir,
+):
+    xs = np.asarray(kinematics["xs"], dtype=float)
+    ys = np.asarray(kinematics["ys"], dtype=float)
+    sorted_frames = np.asarray(kinematics["sorted_frames"], dtype=int)
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    ax.plot(xs, ys, color="gray", linewidth=2, label="Smoothed BEV trajectory")
+
+    if onset_frame in sorted_frames:
+        idx = list(sorted_frames).index(onset_frame)
+        ax.scatter(xs[idx], ys[idx], color="green", s=100, label="onset")
+
+        arrow_scale = 3.0
+        ax.arrow(
+            xs[idx],
+            ys[idx],
+            stable_heading[0] * arrow_scale,
+            stable_heading[1] * arrow_scale,
+            head_width=0.4,
+            color="blue",
+            length_includes_head=True,
+            label="stable pre-turn heading",
+        )
+
+    if peak_frame in sorted_frames:
+        idx = list(sorted_frames).index(peak_frame)
+        ax.scatter(xs[idx], ys[idx], color="red", marker="x", s=120, label="peak")
+
+    ax.set_aspect("equal", "datalim")
+    ax.set_title(f"BEV trajectory tracking with stable pre-turn heading\nPedestrian {tid}")
+    ax.set_xlabel("X position in PedX 3D coordinate system")
+    ax.set_ylabel("Y position in PedX 3D coordinate system")
+    ax.legend(loc="upper left")
+    ax.grid(True)
+
+    base_path = person_output_dir / f"fig_a_bev_trajectory_{short_id}_onset_{onset_frame}"
+    return save_figure(fig, base_path)
+
+
+def plot_angular_velocity(
+    tid,
+    short_id,
+    onset_frame,
+    av_time,
+    av_window,
+    peak_time,
+    person_output_dir,
+):
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    ax.plot(av_time, av_window, color="purple", linewidth=2, label="Angular velocity")
+    ax.axvline(0, color="green", linestyle="--", linewidth=2, label="onset")
+
+    if peak_time is not None:
+        ax.axvline(peak_time, color="red", linestyle="--", linewidth=2, label="peak")
+
+    ax.set_title(f"Angular velocity\nPedestrian {tid}")
+    ax.set_xlabel("Time relative to onset [s]")
+    ax.set_ylabel("Angular velocity [deg/frame]")
+    ax.legend(loc="upper left")
+    ax.grid(True)
+
+    base_path = person_output_dir / f"fig_b_angular_velocity_{short_id}_onset_{onset_frame}"
+    return save_figure(fig, base_path)
+
+
+def plot_head_sensitivity(
+    tid,
+    short_id,
+    onset_frame,
+    peak_time,
+    times,
+    head_sensitivity,
+    person_output_dir,
+):
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    for ref_name in ["stable", "past_05s", "past_10s", "past_15s", "tangent"]:
+        ax.plot(
+            times,
+            head_sensitivity[ref_name],
+            marker="o",
+            linewidth=1.8,
+            label=ref_name,
+        )
+
+    ax.axhline(0, color="black", linewidth=1)
+    ax.axvline(0, color="green", linestyle="--", linewidth=2, label="onset")
+
+    if peak_time is not None:
+        ax.axvline(peak_time, color="red", linestyle="--", linewidth=2, label="peak")
+
+    ax.set_title(f"Head orientation sensitivity after baseline correction\nPedestrian {tid}")
+    ax.set_xlabel("Time relative to onset [s]")
+    ax.set_ylabel("Head deviation change [deg]")
+    ax.legend(loc="upper left")
+    ax.grid(True)
+
+    base_path = person_output_dir / f"fig_c_head_orientation_{short_id}_onset_{onset_frame}"
+    return save_figure(fig, base_path)
+
+
+def plot_shoulder_sensitivity(
+    tid,
+    short_id,
+    onset_frame,
+    peak_time,
+    times,
+    shoulder_sensitivity,
+    person_output_dir,
+):
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    for ref_name in ["stable", "past_05s", "past_10s", "past_15s", "tangent"]:
+        ax.plot(
+            times,
+            shoulder_sensitivity[ref_name],
+            marker="s",
+            linewidth=1.8,
+            label=ref_name,
+        )
+
+    ax.axhline(0, color="black", linewidth=1)
+    ax.axvline(0, color="green", linestyle="--", linewidth=2, label="onset")
+
+    if peak_time is not None:
+        ax.axvline(peak_time, color="red", linestyle="--", linewidth=2, label="peak")
+
+    ax.set_title(f"Shoulder / torso orientation sensitivity after baseline correction\nPedestrian {tid}")
+    ax.set_xlabel("Time relative to onset [s]")
+    ax.set_ylabel("Shoulder deviation change [deg]")
+    ax.legend(loc="upper left")
+    ax.grid(True)
+
+    base_path = person_output_dir / f"fig_d_shoulder_orientation_{short_id}_onset_{onset_frame}"
+    return save_figure(fig, base_path)
+
+
+# =============================================================================
 # EVENT PROCESSING
 # =============================================================================
 
 def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time):
     short_id = tid[-4:]
+
+    person_output_dir = OUTPUT_DIR / f"pedestrian_{short_id}"
+    person_output_dir.mkdir(parents=True, exist_ok=True)
 
     peak_frame = peak_frame_after_onset(kinematics, onset_frame)
 
@@ -583,9 +673,6 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
             "tangent": walking_dir_smoothed_tangent(kinematics, frame_id),
         }
 
-        # -------------------------------------------------------------
-        # Shoulder deviation for all walking references
-        # -------------------------------------------------------------
         for ref_name, ref_dir in walk_refs.items():
             if shoulder_line is None or ref_dir is None:
                 row[f"shoulder_{ref_name}"] = np.nan
@@ -602,10 +689,6 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
 
             row[f"shoulder_{ref_name}"] = signed_deviation_deg(ref_dir, shoulder_forward)
 
-        # -------------------------------------------------------------
-        # Head deviation for all axes and all references
-        # We later select one head axis and plot it across references.
-        # -------------------------------------------------------------
         for axis_name, axis_vec in HEAD_AXES.items():
             head_vec_3d = head_rot @ axis_vec
             head_vec_2d = normalize_2d(head_vec_3d[:2])
@@ -633,9 +716,6 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
         best_head_axis = "+Z"
         best_head_axis_score = np.nan
 
-    # -------------------------------------------------------------
-    # Build baseline-corrected head reference sensitivity curves
-    # -------------------------------------------------------------
     head_sensitivity = {}
     head_sensitivity_baselines = {}
 
@@ -645,9 +725,6 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
         head_sensitivity[ref_name] = corrected
         head_sensitivity_baselines[ref_name] = baseline
 
-    # -------------------------------------------------------------
-    # Build baseline-corrected shoulder reference sensitivity curves
-    # -------------------------------------------------------------
     shoulder_sensitivity = {}
     shoulder_sensitivity_baselines = {}
 
@@ -671,9 +748,6 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
     if peak_frame is not None:
         peak_time = relative_time_seconds(peak_frame, onset_frame, frame_to_time)
 
-    # -------------------------------------------------------------------------
-    # Save event CSV
-    # -------------------------------------------------------------------------
     event_df = pd.DataFrame({
         "frame": frame_arr,
         "time_seconds_relative_to_onset_from_timestamps": times,
@@ -685,135 +759,49 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
     for ref_name, values in shoulder_sensitivity.items():
         event_df[f"shoulder_{ref_name}_baseline_corrected_deg"] = values
 
-    out_csv = OUTPUT_DIR / f"clean_timestamp_diagnostic_{short_id}_onset_{onset_frame}.csv"
+    out_csv = person_output_dir / f"separate_figures_data_{short_id}_onset_{onset_frame}.csv"
     event_df.to_csv(out_csv, index=False)
 
-    # -------------------------------------------------------------------------
-    # Plot: 4 panels
-    # -------------------------------------------------------------------------
-    fig, axes = plt.subplots(
-        4,
-        1,
-        figsize=(16, 14),
-        sharex=False,
-        constrained_layout=True,
+    bev_png, bev_svg = plot_bev_trajectory(
+        tid=tid,
+        short_id=short_id,
+        onset_frame=onset_frame,
+        peak_frame=peak_frame,
+        kinematics=kinematics,
+        stable_heading=stable_heading,
+        person_output_dir=person_output_dir,
     )
 
-    fig.suptitle(
-        f"Clean Timestamp Step 5 Diagnostic | ID {short_id} | onset {onset_frame} | peak {peak_frame}\n"
-        f"Time axis uses PedX image timestamps. "
-        f"Best diagnostic head axis: {best_head_axis}",
-        fontsize=14,
+    av_png, av_svg = plot_angular_velocity(
+        tid=tid,
+        short_id=short_id,
+        onset_frame=onset_frame,
+        av_time=av_time,
+        av_window=av_window,
+        peak_time=peak_time,
+        person_output_dir=person_output_dir,
     )
 
-    # Panel 1: Top-down path
-    xs = np.asarray(kinematics["xs"], dtype=float)
-    ys = np.asarray(kinematics["ys"], dtype=float)
-    sorted_frames = np.asarray(kinematics["sorted_frames"], dtype=int)
-
-    axes[0].plot(xs, ys, color="gray", linewidth=2, label="Step 2 smoothed path")
-
-    if onset_frame in sorted_frames:
-        idx = list(sorted_frames).index(onset_frame)
-        axes[0].scatter(xs[idx], ys[idx], color="green", s=100, label="onset")
-
-        arrow_scale = 3.0
-        axes[0].arrow(
-            xs[idx],
-            ys[idx],
-            stable_heading[0] * arrow_scale,
-            stable_heading[1] * arrow_scale,
-            head_width=0.4,
-            color="blue",
-            length_includes_head=True,
-            label="stable pre-turn heading",
-        )
-
-    if peak_frame in sorted_frames:
-        idx = list(sorted_frames).index(peak_frame)
-        axes[0].scatter(xs[idx], ys[idx], color="red", marker="x", s=120, label="peak")
-
-    axes[0].set_aspect("equal", "datalim")
-    axes[0].set_title("Top-down path with fixed stable pre-turn heading")
-    axes[0].set_xlabel("X position in PedX 3D coordinate system")
-    axes[0].set_ylabel("Y position in PedX 3D coordinate system")
-    axes[0].legend()
-    axes[0].grid(True)
-
-    # Panel 2: Angular velocity
-    axes[1].plot(av_time, av_window, color="purple", linewidth=2, label="Step 2 angular velocity")
-    axes[1].axvline(0, color="green", linestyle="--", linewidth=2, label="onset")
-
-    if peak_time is not None:
-        axes[1].axvline(peak_time, color="red", linestyle="--", linewidth=2, label="peak")
-
-    axes[1].set_ylabel("Angular velocity [deg/frame]")
-    axes[1].set_xlabel("Time relative to onset [s], from PedX timestamps")
-    axes[1].set_title(
-        "Existing Step 2 angular velocity "
-        "(y-axis remains deg/frame; x-axis uses real timestamps)"
+    head_png, head_svg = plot_head_sensitivity(
+        tid=tid,
+        short_id=short_id,
+        onset_frame=onset_frame,
+        peak_time=peak_time,
+        times=times,
+        head_sensitivity=head_sensitivity,
+        person_output_dir=person_output_dir,
     )
-    axes[1].legend()
-    axes[1].grid(True)
 
-    # Panel 3: Head reference sensitivity
-    for ref_name in ["stable", "past_05s", "past_10s", "past_15s", "tangent"]:
-        baseline_value = head_sensitivity_baselines.get(ref_name, np.nan)
-
-        axes[2].plot(
-            times,
-            head_sensitivity[ref_name],
-            marker="o",
-            linewidth=1.8,
-            label=f"{ref_name}, baseline={baseline_value:.1f}",
-        )
-
-    axes[2].axhline(0, color="black", linewidth=1)
-    axes[2].axvline(0, color="green", linestyle="--", linewidth=2)
-
-    if peak_time is not None:
-        axes[2].axvline(peak_time, color="red", linestyle="--", linewidth=2)
-
-    axes[2].set_ylabel("Head deviation change [deg]")
-    axes[2].set_xlabel("Time relative to onset [s], from PedX timestamps")
-    axes[2].set_title(
-        f"Head orientation sensitivity after baseline correction "
-        f"(selected diagnostic head axis: {best_head_axis})"
+    shoulder_png, shoulder_svg = plot_shoulder_sensitivity(
+        tid=tid,
+        short_id=short_id,
+        onset_frame=onset_frame,
+        peak_time=peak_time,
+        times=times,
+        shoulder_sensitivity=shoulder_sensitivity,
+        person_output_dir=person_output_dir,
     )
-    axes[2].legend()
-    axes[2].grid(True)
 
-    # Panel 4: Shoulder reference sensitivity
-    for ref_name in ["stable", "past_05s", "past_10s", "past_15s", "tangent"]:
-        baseline_value = shoulder_sensitivity_baselines.get(ref_name, np.nan)
-
-        axes[3].plot(
-            times,
-            shoulder_sensitivity[ref_name],
-            marker="s",
-            linewidth=1.8,
-            label=f"{ref_name}, baseline={baseline_value:.1f}",
-        )
-
-    axes[3].axhline(0, color="black", linewidth=1)
-    axes[3].axvline(0, color="green", linestyle="--", linewidth=2)
-
-    if peak_time is not None:
-        axes[3].axvline(peak_time, color="red", linestyle="--", linewidth=2)
-
-    axes[3].set_ylabel("Shoulder deviation change [deg]")
-    axes[3].set_xlabel("Time relative to onset [s], from PedX timestamps")
-    axes[3].set_title("Shoulder / torso orientation sensitivity after baseline correction")
-    axes[3].legend()
-    axes[3].grid(True)
-
-    out_png = OUTPUT_DIR / f"clean_timestamp_diagnostic_{short_id}_onset_{onset_frame}.png"
-    fig.savefig(out_png, dpi=150)
-    plt.close(fig)
-
-    # -------------------------------------------------------------------------
-    # Summary values
-    # -------------------------------------------------------------------------
     def window_mean(values, start_s, end_s):
         values = np.asarray(values, dtype=float)
         mask = (
@@ -835,31 +823,39 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
         "peak_time_seconds_from_timestamps": peak_time,
         "best_head_axis": best_head_axis,
         "best_head_axis_baseline_std": best_head_axis_score,
-
         "head_stable_mean_pre_1s_to_0s": window_mean(head_sensitivity["stable"], -1.0, 0.0),
         "head_stable_mean_0s_to_peak": window_mean(
             head_sensitivity["stable"],
             0.0,
             peak_time if peak_time is not None else POST_SECONDS,
         ),
-
         "shoulder_stable_mean_pre_1s_to_0s": window_mean(shoulder_sensitivity["stable"], -1.0, 0.0),
         "shoulder_stable_mean_0s_to_peak": window_mean(
             shoulder_sensitivity["stable"],
             0.0,
             peak_time if peak_time is not None else POST_SECONDS,
         ),
-
         "head_tangent_mean_pre_1s_to_0s": window_mean(head_sensitivity["tangent"], -1.0, 0.0),
         "shoulder_tangent_mean_pre_1s_to_0s": window_mean(shoulder_sensitivity["tangent"], -1.0, 0.0),
-
+        "person_output_dir": str(person_output_dir),
         "event_csv": str(out_csv),
-        "event_plot": str(out_png),
+        "bev_png": str(bev_png),
+        "bev_svg": str(bev_svg),
+        "angular_velocity_png": str(av_png),
+        "angular_velocity_svg": str(av_svg),
+        "head_png": str(head_png),
+        "head_svg": str(head_svg),
+        "shoulder_png": str(shoulder_png),
+        "shoulder_svg": str(shoulder_svg),
     }
 
-    print(f"[OK] Generated {short_id} onset {onset_frame}")
-    print(f"     plot: {out_png}")
-    print(f"     csv : {out_csv}")
+    print(f"[OK] Generated separate figures for {short_id} onset {onset_frame}")
+    print(f"     folder   : {person_output_dir}")
+    print(f"     BEV      : {bev_png}")
+    print(f"     AV       : {av_png}")
+    print(f"     Head     : {head_png}")
+    print(f"     Shoulder : {shoulder_png}")
+    print(f"     CSV      : {out_csv}")
 
     return summary
 
@@ -870,7 +866,7 @@ def process_one_event(tid, onset_frame, kinematics, model, device, frame_to_time
 
 def main():
     print("=" * 80)
-    print("Clean Timestamp Temporary Step 5 Diagnostic for ALL Turn Events")
+    print("Timestamp Temporary Step 5 Diagnostic: Separate Figures")
     print("=" * 80)
     print("DATASET_DIR:", DATASET_DIR)
     print("SEQUENCE   :", SEQUENCE)
@@ -937,11 +933,11 @@ def main():
                 summaries.append(summary)
 
     summary_df = pd.DataFrame(summaries)
-    summary_csv = OUTPUT_DIR / "all_turn_events_clean_timestamp_summary.csv"
+    summary_csv = OUTPUT_DIR / "all_turn_events_separate_figures_summary.csv"
     summary_df.to_csv(summary_csv, index=False)
 
     print("\n" + "=" * 80)
-    print("[DONE] Clean timestamp all-event temporary diagnostics complete.")
+    print("[DONE] Separate-figure timestamp diagnostics complete.")
     print("Events processed:", len(summaries))
     print("Summary CSV     :", summary_csv)
     print("Output folder   :", OUTPUT_DIR)
@@ -957,8 +953,11 @@ def main():
                 "best_head_axis",
                 "head_stable_mean_0s_to_peak",
                 "shoulder_stable_mean_0s_to_peak",
-                "head_tangent_mean_pre_1s_to_0s",
-                "shoulder_tangent_mean_pre_1s_to_0s",
+                "person_output_dir",
+                "bev_png",
+                "angular_velocity_png",
+                "head_png",
+                "shoulder_png",
             ]
         ])
 
@@ -967,3 +966,15 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+import cv2
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import torch
+
+# =============================================================================
+# IMPORT EXISTING PROJECT CODE
+# =============================================================================
+
+ANALYSIS_ROOT = Path(__file__).resolve().parent / "human_skeleton_analysis"
