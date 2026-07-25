@@ -175,7 +175,6 @@ def generate_gait_symmetry_video(tid, onset_frame, times, theta_1_list, theta_2_
     print(f"     -> Video saved: {video_path}")
 
 
-
 def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_dir):
     """
     Generates a high-quality distribution plot of the leg extension angles
@@ -224,6 +223,39 @@ def plot_cosine_delta_distribution(all_deltas, threshold, output_dir):
     sns.histplot(all_deltas, color="purple", kde=True, stat="density", alpha=0.4, bins=30, ax=ax)
 
     # Add the threshold lines (positive and negative)
+    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5, label=f"Upper Bound (+{threshold})")
+    ax.axvline(-threshold, color='red', linestyle='--', linewidth=2.5, label=f"Lower Bound (-{threshold})")
+
+    # Formatting (No title as requested)
+    ax.set_xlabel("Bio-LSTM Cosine Delta (Symmetry Variance)", fontsize=12)
+    ax.set_ylabel("Density", fontsize=12)
+    ax.legend(loc="upper right", fontsize=11)
+    ax.grid(True, linestyle=":", alpha=0.6)
+
+    # Save PNG and SVG
+    png_path = Path(output_dir) / "constraint_B_distribution.png"
+    svg_path = Path(output_dir) / "constraint_B_distribution.svg"
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    fig.savefig(svg_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"     -> Saved Constraint B Distribution Plot to {output_dir}")
+
+
+def plot_cosine_delta_distribution(all_deltas, threshold, output_dir):
+    """
+    Generates a high-quality distribution plot of the Bio-LSTM Cosine Delta
+    for the thesis, marking the positive and negative Constraint B thresholds.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    import seaborn as sns
+    # Use seaborn for a smooth kernel density estimate (KDE) and histogram
+    sns.histplot(all_deltas, color="purple", kde=True, stat="density", alpha=0.4, bins=30, ax=ax)
+
+    # Add the threshold lines (positive and negative bounds)
     ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5, label=f"Upper Bound (+{threshold})")
     ax.axvline(-threshold, color='red', linestyle='--', linewidth=2.5, label=f"Lower Bound (-{threshold})")
 
