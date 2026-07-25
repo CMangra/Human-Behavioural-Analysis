@@ -21,7 +21,7 @@ from data_analysis.smpl_audit import run_dataset_audit
 from visualizations.separate_orientation_diagnostics import run as run_step5_separate_diagnostics
 
 # Imports for Step 6
-from data_analysis.gait_biomechanics import compute_leg_symmetry_bio_lstm
+from data_analysis.gait_biomechanics import compute_leg_symmetry_simple
 from data_analysis.outlier_elimination import evaluate_biomechanical_plausibility
 from visualizations.symmetry_diagnostics import plot_gait_symmetry_diagnostics, generate_gait_symmetry_video, \
     plot_leg_extension_distribution, plot_cosine_delta_distribution
@@ -31,7 +31,7 @@ from visualizations.smpl_video_annotator import load_smpl_params, load_smpl_mode
 # ==========================================
 # ENVIRONMENT CONFIGURATION (LOCAL vs SERVER)
 # ==========================================
-ENVIRONMENT = "LOCAL"  # Change to "LOCAL" when running on your machine
+ENVIRONMENT = "SERVER"  # Change to "LOCAL" when running on your machine
 
 if ENVIRONMENT == "SERVER":
     WORKSPACE_ROOT = Path("/workspace")
@@ -61,7 +61,7 @@ def main():
     for sequence in TARGET_SEQUENCES:
         print(f"\n=== PROCESSING SEQUENCE: {sequence} ===")
 
-        # Create sequence-specific output base to avoid overwriting files!
+        # Create sequence-specific output base to avoid overwriting files
         seq_output_base = OUTPUT_BASE / sequence
 
         # ---------------------------------------------------------
@@ -135,7 +135,6 @@ def main():
             )
 
         # ---------------------------------------------------------
-        # ---------------------------------------------------------
         # STEP 6: Biomechanical Gait Symmetry & Outlier Detection
         # ---------------------------------------------------------
         print("\n" + "=" * 80)
@@ -175,7 +174,7 @@ def main():
                                 betas, pose, trans = load_smpl_params(json_path)
                                 joints = smpl_forward_joints(smpl_model, betas, pose, trans, device)
 
-                                t_l_deg, t_r_deg, cos_l, cos_r, bio_delta = compute_leg_symmetry_bio_lstm(joints)
+                                t_l_deg, t_r_deg, cos_l, cos_r, bio_delta = compute_leg_symmetry_simple(joints)
 
                                 times.append(t)
                                 theta_l_list.append(t_l_deg)
@@ -195,8 +194,7 @@ def main():
                         print(f"\n[STEP 6] Analyzing gait symmetry for {short_id} at onset {onset_frame}")
 
                         # 1. Run the Outlier Evaluation
-                        evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list,
-                                                                         bio_lstm_deltas)
+                        evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list, bio_lstm_deltas)
 
                         outlier_audit_results.append({
                             "tid": tid,
@@ -206,8 +204,7 @@ def main():
 
                         # 2. Visualizations
                         plot_gait_symmetry_diagnostics(
-                            tid, times, theta_l_list, theta_r_list, bio_lstm_deltas, sample_joints,
-                            str(step6_out_dir)
+                            tid, times, theta_l_list, theta_r_list, bio_lstm_deltas, sample_joints, str(step6_out_dir)
                         )
                         generate_gait_symmetry_video(
                             tid, onset_frame, times, theta_l_list, theta_r_list, bio_lstm_deltas, all_joints,
@@ -246,6 +243,7 @@ def main():
                 )
 
     print("\n=== PIPELINE COMPLETE ===")
+
 
 if __name__ == "__main__":
     main()
