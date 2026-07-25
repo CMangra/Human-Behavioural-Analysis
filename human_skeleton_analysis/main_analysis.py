@@ -22,12 +22,13 @@ from data_analysis.smpl_audit import run_dataset_audit
 from visualizations.separate_orientation_diagnostics import run as run_step5_separate_diagnostics
 from visualizations.smpl_video_annotator import load_smpl_model, load_smpl_params
 
-# Imports for Step 6
+# Imports for Step 6 & 7
 from data_analysis.smpl_orientation_metrics import smpl_forward_joints, build_smpl_json_path
 from data_analysis.gait_biomechanics import compute_leg_symmetry_simple
 from data_analysis.outlier_elimination import evaluate_biomechanical_plausibility
 from visualizations.symmetry_diagnostics import plot_gait_symmetry_diagnostics, generate_gait_symmetry_video, \
     plot_leg_extension_distribution, plot_symmetry_variance_distribution
+from visualizations.outlier_visualizer import generate_outlier_collage
 
 # ==========================================
 # ENVIRONMENT CONFIGURATION (LOCAL vs SERVER)
@@ -134,9 +135,10 @@ def main():
         step6_out_dir.mkdir(parents=True, exist_ok=True)
 
         device = torch.device("cpu")
-        smpl_model, _ = load_smpl_model(MODEL_ROOT, device)
+        smpl_model, faces = load_smpl_model(MODEL_ROOT, device)  # NOTE: Unpacking faces here now!
 
         outlier_audit_results = []
+        outliers_to_visualize = []  # Store outliers for Step 7
 
         if not usable_turn_results:
             print("[WARNING] No usable turns for Step 6.")
@@ -150,6 +152,9 @@ def main():
                     times, theta_l_list, theta_r_list, sym_variance_list, all_joints = [], [], [], [], []
                     sample_joints = None
 
+                    # Track frame IDs for Step 7 Outlier Finding
+                    frame_ids_list = []
+
                     for f in kinematics["sorted_frames"]:
                         t = relative_time_seconds(f, onset_frame, frame_to_time)
                         if -4.0 <= t <= 3.0:
@@ -161,12 +166,12 @@ def main():
                                 t_l_deg, t_r_deg, sym_variance = compute_leg_symmetry_simple(joints)
 
                                 times.append(t)
+                                frame_ids_list.append(f)
                                 theta_l_list.append(t_l_deg)
                                 theta_r_list.append(t_r_deg)
                                 sym_variance_list.append(sym_variance)
                                 all_joints.append(joints)
 
-                                # Append to the global absolute tracking for Constraint A
                                 thesis_global_theta_l.append(t_l_deg)
                                 thesis_global_theta_r.append(t_r_deg)
 
@@ -176,10 +181,7 @@ def main():
                     if times and sample_joints is not None:
                         print(f"\n[STEP 6] Analyzing gait symmetry for {short_id} at onset {onset_frame}")
 
-                        # Evaluate the sequence
                         evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list, sym_variance_list)
-
-                        # Store the mean variance for this specific sequence for the global Constraint B plot
                         thesis_global_sequence_means.append(evaluation["mean_symmetry_variance_deg"])
 
                         outlier_audit_results.append({
@@ -187,6 +189,24 @@ def main():
                             "onset_frame": onset_frame,
                             **evaluation
                         })
+
+                        # --- NEW: Catch Outliers for Step 7 ---
+                        if not evaluation["is_valid"]:
+                            # Find the specific frame with the maximum extension to visualize
+                            max_idx_l = np.argmax(theta_l_list)
+                            max_idx_r = np.argmax(theta_r_list)
+
+                            if theta_l_list[max_idx_l] > theta_r_list[max_idx_r]:
+                                culprit_frame = frame_ids_list[max_idx_l]
+                            else:
+                                culprit_frame = frame_ids_list[max_idx_r]
+
+                            outliers_to_visualize.append({
+                                "tid": tid,
+                                "fail_frame": culprit_frame,
+                                "max_extension": evaluation["max_extension_observed_deg"],
+                                "mean_variance": evaluation["mean_symmetry_variance_deg"]
+                            })
 
                         plot_gait_symmetry_diagnostics(
                             tid, times, theta_l_list, theta_r_list, sym_variance_list, sample_joints, str(step6_out_dir)
@@ -208,6 +228,31 @@ def main():
                 audit_df.to_csv(audit_csv_path, index=False)
                 print("\n=== OUTLIER AUDIT RESULTS ===")
                 print(audit_df.to_string())
+
+        # ---------------------------------------------------------
+        # STEP 7: OUTLIER VISUALIZATION
+        # ---------------------------------------------------------
+        if outliers_to_visualize:
+            print("\n" + "=" * 80)
+            print("STEP 7: GENERATING OUTLIER VISUAL PROOFS")
+            print("=" * 80)
+
+            step7_out_dir = seq_output_base / "step7_outlier_proofs"
+            step7_out_dir.mkdir(parents=True, exist_ok=True)
+
+            for outlier in outliers_to_visualize:
+                generate_outlier_collage(
+                    data_dir=str(DATASET_DIR),
+                    sequence=sequence,
+                    tid=outlier["tid"],
+                    fail_frame=outlier["fail_frame"],
+                    max_extension=outlier["max_extension"],
+                    mean_variance=outlier["mean_variance"],
+                    smpl_model=smpl_model,
+                    faces=faces,
+                    device=device,
+                    output_dir=str(step7_out_dir)
+                )
 
     # ---------------------------------------------------------
     # FINAL STEP: AGGREGATE THESIS GRAPHS
