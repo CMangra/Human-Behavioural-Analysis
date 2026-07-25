@@ -20,11 +20,11 @@ from data_analysis.timestamp_utils import load_frame_timestamps, relative_time_s
 from data_analysis.smpl_audit import run_dataset_audit
 from visualizations.separate_orientation_diagnostics import run as run_step5_separate_diagnostics
 
-# Imports for Step 6
+# Imports for Step 6 (Simplified Approach)
 from data_analysis.gait_biomechanics import compute_leg_symmetry_simple
 from data_analysis.outlier_elimination import evaluate_biomechanical_plausibility
 from visualizations.symmetry_diagnostics import plot_gait_symmetry_diagnostics, generate_gait_symmetry_video, \
-    plot_leg_extension_distribution, plot_cosine_delta_distribution
+    plot_leg_extension_distribution, plot_symmetry_variance_distribution
 from data_analysis.smpl_orientation_metrics import smpl_forward_joints, build_smpl_json_path
 from visualizations.smpl_video_annotator import load_smpl_params, load_smpl_model
 
@@ -138,7 +138,7 @@ def main():
         # STEP 6: Biomechanical Gait Symmetry & Outlier Detection
         # ---------------------------------------------------------
         print("\n" + "=" * 80)
-        print("STEP 6: BIOMECHANICAL GAIT SYMMETRY ANALYSIS (BIO-LSTM)")
+        print("STEP 6: BIOMECHANICAL GAIT SYMMETRY ANALYSIS (SIMPLIFIED)")
         print("=" * 80)
 
         step6_out_dir = seq_output_base / "step6_biomechanics_diagnostics"
@@ -152,7 +152,7 @@ def main():
         # Track global metrics for the distribution graphs
         global_theta_l = []
         global_theta_r = []
-        global_cosine_deltas = []
+        global_sym_variances = []
 
         if not usable_turn_results:
             print("[WARNING] No usable turns for Step 6.")
@@ -163,7 +163,7 @@ def main():
                 kinematics = compute_kinematics(frames_dict)
 
                 for onset_frame in onsets:
-                    times, theta_l_list, theta_r_list, bio_lstm_deltas, all_joints = [], [], [], [], []
+                    times, theta_l_list, theta_r_list, sym_variance_list, all_joints = [], [], [], [], []
                     sample_joints = None
 
                     for f in kinematics["sorted_frames"]:
@@ -174,18 +174,19 @@ def main():
                                 betas, pose, trans = load_smpl_params(json_path)
                                 joints = smpl_forward_joints(smpl_model, betas, pose, trans, device)
 
-                                t_l_deg, t_r_deg, cos_l, cos_r, bio_delta = compute_leg_symmetry_simple(joints)
+                                # EXACT 3-VALUE UNPACKING
+                                t_l_deg, t_r_deg, sym_variance = compute_leg_symmetry_simple(joints)
 
                                 times.append(t)
                                 theta_l_list.append(t_l_deg)
                                 theta_r_list.append(t_r_deg)
-                                bio_lstm_deltas.append(bio_delta)
+                                sym_variance_list.append(sym_variance)
                                 all_joints.append(joints)
 
                                 # Append to the sequence's global lists
                                 global_theta_l.append(t_l_deg)
                                 global_theta_r.append(t_r_deg)
-                                global_cosine_deltas.append(bio_delta)
+                                global_sym_variances.append(sym_variance)
 
                                 if f == onset_frame:
                                     sample_joints = joints
@@ -194,7 +195,7 @@ def main():
                         print(f"\n[STEP 6] Analyzing gait symmetry for {short_id} at onset {onset_frame}")
 
                         # 1. Run the Outlier Evaluation
-                        evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list, bio_lstm_deltas)
+                        evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list, sym_variance_list)
 
                         outlier_audit_results.append({
                             "tid": tid,
@@ -204,20 +205,19 @@ def main():
 
                         # 2. Visualizations
                         plot_gait_symmetry_diagnostics(
-                            tid, times, theta_l_list, theta_r_list, bio_lstm_deltas, sample_joints, str(step6_out_dir)
+                            tid, times, theta_l_list, theta_r_list, sym_variance_list, sample_joints, str(step6_out_dir)
                         )
                         generate_gait_symmetry_video(
-                            tid, onset_frame, times, theta_l_list, theta_r_list, bio_lstm_deltas, all_joints,
+                            tid, onset_frame, times, theta_l_list, theta_r_list, sym_variance_list, all_joints,
                             str(step6_out_dir)
                         )
 
                         # 3. CSV Export
                         df_sym = pd.DataFrame({
                             "time_s": times, "theta_L_deg": theta_l_list, "theta_R_deg": theta_r_list,
-                            "bio_lstm_cosine_delta": bio_lstm_deltas
+                            "symmetry_variance_deg": sym_variance_list
                         })
-                        df_sym.to_csv(step6_out_dir / f"bio_lstm_symmetry_{short_id}_onset_{onset_frame}.csv",
-                                      index=False)
+                        df_sym.to_csv(step6_out_dir / f"gait_symmetry_{short_id}_onset_{onset_frame}.csv", index=False)
 
             # Output the final audit table for this sequence
             if outlier_audit_results:
@@ -228,7 +228,7 @@ def main():
                 print(audit_df.to_string())
 
             # Output the global distribution plots for this sequence
-            if global_theta_l and global_theta_r and global_cosine_deltas:
+            if global_theta_l and global_theta_r and global_sym_variances:
                 print(f"\n[STEP 6] Generating Global Distribution Plots for Sequence {sequence}...")
                 plot_leg_extension_distribution(
                     global_theta_l,
@@ -236,9 +236,11 @@ def main():
                     threshold=60.0,
                     output_dir=str(step6_out_dir)
                 )
-                plot_cosine_delta_distribution(
-                    global_cosine_deltas,
-                    threshold=0.15,
+
+                # Distribution plot for Constraint B (Threshold set to 10 degrees)
+                plot_symmetry_variance_distribution(
+                    global_sym_variances,
+                    threshold=10.0,
                     output_dir=str(step6_out_dir)
                 )
 
