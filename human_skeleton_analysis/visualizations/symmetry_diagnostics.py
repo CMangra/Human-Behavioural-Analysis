@@ -184,11 +184,11 @@ def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Use seaborn for a smooth kernel density estimate (KDE) and histogram
-    sns.histplot(all_theta_l, color="blue", label="Left Leg (\u03B8_L)", kde=True, stat="density", alpha=0.4, bins=30,
+    # Use stat="count" instead of "density"
+    sns.histplot(all_theta_l, color="blue", label="Left Leg (\u03B8_L)", kde=True, stat="count", alpha=0.4, bins=30,
                  ax=ax)
-    sns.histplot(all_theta_r, color="orange", label="Right Leg (\u03B8_R)", kde=True, stat="density", alpha=0.4,
-                 bins=30, ax=ax)
+    sns.histplot(all_theta_r, color="orange", label="Right Leg (\u03B8_R)", kde=True, stat="count", alpha=0.4, bins=30,
+                 ax=ax)
 
     # Add the threshold line
     ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5,
@@ -196,47 +196,47 @@ def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_
 
     # Formatting for thesis quality
     ax.set_xlabel("Absolute Angle Relative to Vertical Spine Vector [Degrees]", fontsize=12)
-    ax.set_ylabel("Density", fontsize=12)
+    ax.set_ylabel("Count (Number of Poses)", fontsize=12)
     ax.legend(loc="upper right", fontsize=11)
     ax.grid(True, linestyle=":", alpha=0.6)
 
     # Save PNG and SVG
-    png_path = Path(output_dir) / "constraint_A_distribution.png"
-    svg_path = Path(output_dir) / "constraint_A_distribution.svg"
+    png_path = Path(output_dir) / "global_constraint_A_distribution.png"
+    svg_path = Path(output_dir) / "global_constraint_A_distribution.svg"
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(svg_path, format="svg", bbox_inches="tight")
     plt.close(fig)
 
-    print(f"     -> Saved Distribution Plots to {output_dir}")
+    print(f"     -> Saved Global Distribution Plot A to {output_dir}")
 
 
-def plot_symmetry_variance_distribution(all_variances, threshold, output_dir):
+def plot_symmetry_variance_distribution(all_mean_variances, threshold, output_dir):
     """
     Generates a high-quality distribution plot of the Mean Symmetry Variance (Constraint B)
-    for the thesis, marking the positive and negative thresholds.
+    across all sequences for the thesis, marking the positive and negative thresholds.
     """
     os.makedirs(output_dir, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Use seaborn for a smooth kernel density estimate (KDE) and histogram
-    sns.histplot(all_variances, color="purple", kde=True, stat="density", alpha=0.4, bins=30, ax=ax)
+    # Use stat="count" instead of "density"
+    sns.histplot(all_mean_variances, color="purple", kde=True, stat="count", alpha=0.4, bins=15, ax=ax)
 
     # Add the threshold lines (positive and negative bounds)
     ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5, label=f"Upper Bound (+{threshold}\u00B0)")
     ax.axvline(-threshold, color='red', linestyle='--', linewidth=2.5, label=f"Lower Bound (-{threshold}\u00B0)")
 
     # Formatting (No title as requested)
-    ax.set_xlabel("Symmetry Variance [Degrees]", fontsize=12)
-    ax.set_ylabel("Density", fontsize=12)
+    ax.set_xlabel("Sequence Mean Symmetry Variance [Degrees]", fontsize=12)
+    ax.set_ylabel("Count (Number of Sequences)", fontsize=12)
     ax.legend(loc="upper right", fontsize=11)
     ax.grid(True, linestyle=":", alpha=0.6)
 
     # Save PNG and SVG
-    png_path = Path(output_dir) / "constraint_B_distribution.png"
-    svg_path = Path(output_dir) / "constraint_B_distribution.svg"
+    png_path = Path(output_dir) / "global_constraint_B_distribution.png"
+    svg_path = Path(output_dir) / "global_constraint_B_distribution.svg"
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     fig.savefig(svg_path, format="svg", bbox_inches="tight")
     plt.close(fig)
 
-    print(f"     -> Saved Constraint B Distribution Plot to {output_dir}")
+    print(f"     -> Saved Global Constraint B Distribution Plot to {output_dir}")
