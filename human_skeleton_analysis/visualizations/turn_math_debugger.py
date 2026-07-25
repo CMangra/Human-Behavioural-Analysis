@@ -29,7 +29,7 @@ def generate_kinematic_debug_graphs(trajectories, out_dir):
                         label="Detected Peaks")
         if onset_indices:
             ax1.scatter([xs[idx + 1] for idx in onset_indices], [ys[idx + 1] for idx in onset_indices], c='green',
-                        s=100, label="Backtracked Onsets")
+                        s=100, label="Onsets")
 
         ax1.legend()
         ax1.set_aspect('equal', 'datalim')
