@@ -31,7 +31,7 @@ from visualizations.smpl_video_annotator import load_smpl_params, load_smpl_mode
 # ==========================================
 # ENVIRONMENT CONFIGURATION (LOCAL vs SERVER)
 # ==========================================
-ENVIRONMENT = "SERVER"  # Change to "LOCAL" when running on your machine
+ENVIRONMENT = "LOCAL"  # Change to "LOCAL" when running on your machine
 
 if ENVIRONMENT == "SERVER":
     WORKSPACE_ROOT = Path("/workspace")
