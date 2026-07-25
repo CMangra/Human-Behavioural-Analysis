@@ -24,7 +24,7 @@ from visualizations.separate_orientation_diagnostics import run as run_step5_sep
 from data_analysis.gait_biomechanics import compute_leg_symmetry_bio_lstm
 from data_analysis.outlier_elimination import evaluate_biomechanical_plausibility
 from visualizations.symmetry_diagnostics import plot_gait_symmetry_diagnostics, generate_gait_symmetry_video, \
-    plot_leg_extension_distribution
+    plot_leg_extension_distribution, plot_cosine_delta_distribution
 from data_analysis.smpl_orientation_metrics import smpl_forward_joints, build_smpl_json_path
 from visualizations.smpl_video_annotator import load_smpl_params, load_smpl_model
 
@@ -135,6 +135,7 @@ def main():
             )
 
         # ---------------------------------------------------------
+        # ---------------------------------------------------------
         # STEP 6: Biomechanical Gait Symmetry & Outlier Detection
         # ---------------------------------------------------------
         print("\n" + "=" * 80)
@@ -149,9 +150,10 @@ def main():
 
         outlier_audit_results = []
 
-        # Track global angles for the distribution graph
+        # Track global metrics for the distribution graphs
         global_theta_l = []
         global_theta_r = []
+        global_cosine_deltas = []
 
         if not usable_turn_results:
             print("[WARNING] No usable turns for Step 6.")
@@ -181,9 +183,10 @@ def main():
                                 bio_lstm_deltas.append(bio_delta)
                                 all_joints.append(joints)
 
-                                # Append to the sequence's global list
+                                # Append to the sequence's global lists
                                 global_theta_l.append(t_l_deg)
                                 global_theta_r.append(t_r_deg)
+                                global_cosine_deltas.append(bio_delta)
 
                                 if f == onset_frame:
                                     sample_joints = joints
@@ -192,7 +195,8 @@ def main():
                         print(f"\n[STEP 6] Analyzing gait symmetry for {short_id} at onset {onset_frame}")
 
                         # 1. Run the Outlier Evaluation
-                        evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list, bio_lstm_deltas)
+                        evaluation = evaluate_biomechanical_plausibility(theta_l_list, theta_r_list,
+                                                                         bio_lstm_deltas)
 
                         outlier_audit_results.append({
                             "tid": tid,
@@ -202,7 +206,8 @@ def main():
 
                         # 2. Visualizations
                         plot_gait_symmetry_diagnostics(
-                            tid, times, theta_l_list, theta_r_list, bio_lstm_deltas, sample_joints, str(step6_out_dir)
+                            tid, times, theta_l_list, theta_r_list, bio_lstm_deltas, sample_joints,
+                            str(step6_out_dir)
                         )
                         generate_gait_symmetry_video(
                             tid, onset_frame, times, theta_l_list, theta_r_list, bio_lstm_deltas, all_joints,
@@ -225,8 +230,8 @@ def main():
                 print("\n=== OUTLIER AUDIT RESULTS ===")
                 print(audit_df.to_string())
 
-            # Output the global distribution plot for this sequence
-            if global_theta_l and global_theta_r:
+            # Output the global distribution plots for this sequence
+            if global_theta_l and global_theta_r and global_cosine_deltas:
                 print(f"\n[STEP 6] Generating Global Distribution Plots for Sequence {sequence}...")
                 plot_leg_extension_distribution(
                     global_theta_l,
@@ -234,9 +239,13 @@ def main():
                     threshold=60.0,
                     output_dir=str(step6_out_dir)
                 )
+                plot_cosine_delta_distribution(
+                    global_cosine_deltas,
+                    threshold=0.15,
+                    output_dir=str(step6_out_dir)
+                )
 
     print("\n=== PIPELINE COMPLETE ===")
-
 
 if __name__ == "__main__":
     main()
