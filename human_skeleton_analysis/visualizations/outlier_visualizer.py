@@ -6,10 +6,8 @@ from pathlib import Path
 
 from visualizations.smpl_video_annotator import load_camera_calibration, project_points, build_sampled_mesh_edges, \
     draw_wireframe, draw_vertices
-from data_analysis.smpl_orientation_metrics import smpl_forward_joints, build_smpl_json_path
+from data_analysis.smpl_orientation_metrics import build_smpl_json_path
 from visualizations.smpl_video_annotator import load_smpl_params
-
-import config
 
 
 def get_color(tid):
@@ -21,11 +19,13 @@ def generate_outlier_collage(data_dir, sequence, tid, fail_frame, max_extension,
                              device, output_dir):
     """
     Finds the specific frame where the biomechanical constraints failed,
-    projects the SMPL mesh onto all 4 cameras, and creates a 2x2 collage.
+    projects the SMPL mesh onto the 2 primary cameras, highlights the person,
+    and creates a clean side-by-side collage at high resolution.
     """
-    print(f"     -> Generating outlier visual for {tid[-4:]} at frame {fail_frame}...")
+    print(f"     -> Generating HIGH-RES outlier visual for {tid[-4:]} at frame {fail_frame}...")
 
-    PANEL_W, PANEL_H = 640, 480
+    # Doubled the resolution for crisp thesis-quality images
+    PANEL_W, PANEL_H = 1280, 960
     panels = []
 
     json_path = build_smpl_json_path(data_dir, sequence, fail_frame, tid)
@@ -35,7 +35,7 @@ def generate_outlier_collage(data_dir, sequence, tid, fail_frame, max_extension,
 
     betas, pose, trans = load_smpl_params(json_path)
 
-    # We need full vertices for the wireframe, not just joints
+    # We need full vertices for the wireframe
     betas_t = torch.tensor(betas.reshape(1, 10), dtype=torch.float32, device=device)
     global_orient_t = torch.tensor(pose[:3].reshape(1, 3), dtype=torch.float32, device=device)
     body_pose_t = torch.tensor(pose[3:].reshape(1, 69), dtype=torch.float32, device=device)
@@ -47,15 +47,20 @@ def generate_outlier_collage(data_dir, sequence, tid, fail_frame, max_extension,
     vertices = output.vertices.detach().cpu().numpy()[0]
 
     sampled_edges = build_sampled_mesh_edges(faces, stride=4)
-    color = get_color(tid)
 
-    for cam in config.CAMERAS:
+    # Use a highly visible color for the mesh (Yellow in BGR)
+    mesh_color = (0, 255, 255)
+
+    # ONLY loop over the two primary cameras that have direct LiDAR-to-Cam calibration files
+    primary_cameras = ['blu79CF', 'ylw79D0']
+
+    for cam in primary_cameras:
         img_path = os.path.join(data_dir, 'images', sequence, cam, f"{sequence}_{cam}_{fail_frame:07d}.jpg")
         img = cv2.imread(img_path)
 
         if img is None:
             panel = np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)
-            cv2.putText(panel, f"Missing: {cam}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(panel, f"Missing: {cam}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3, cv2.LINE_AA)
             panels.append(panel)
             continue
 
@@ -63,32 +68,43 @@ def generate_outlier_collage(data_dir, sequence, tid, fail_frame, max_extension,
         P_rect, R_rect, T_range_to_cam = load_camera_calibration(Path(data_dir), sequence, cam)
         uv_vertices, valid_vertices = project_points(vertices, P_rect, R_rect, T_range_to_cam)
 
-        # Draw the broken mesh
-        overlay = img.copy()
-        draw_wireframe(overlay, uv_vertices, valid_vertices, sampled_edges, color, thickness=1)
-        draw_vertices(overlay, uv_vertices, valid_vertices, color, max_vertices=1000, radius=2)
+        # Darken the background image slightly so the highlighted person pops out more
+        img = cv2.addWeighted(img, 0.5, np.zeros_like(img), 0.5, 0)
 
-        # Blend
-        img = cv2.addWeighted(overlay, 0.7, img, 0.3, 0)
+        # Draw the broken mesh in bright yellow (Wireframe inherently handles some AA depending on backend)
+        draw_wireframe(img, uv_vertices, valid_vertices, sampled_edges, mesh_color, thickness=2)
 
-        # Add labels
-        cv2.putText(img, cam, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 3)
-        panels.append(cv2.resize(img, (PANEL_W, PANEL_H)))
+        # Calculate Bounding Box to highlight the person
+        if len(uv_vertices) > 0 and np.any(valid_vertices):
+            valid_uv = uv_vertices[valid_vertices]
+            min_x, min_y = np.min(valid_uv, axis=0).astype(int)
+            max_x, max_y = np.max(valid_uv, axis=0).astype(int)
 
-    # Assemble 2x2 Collage
-    top_row = np.hstack((panels[0], panels[1]))
-    bottom_row = np.hstack((panels[2], panels[3]))
-    collage = np.vstack((top_row, bottom_row))
+            # Add padding to the bounding box
+            pad = 60  # Increased padding slightly for larger resolution
+            min_x = max(0, min_x - pad)
+            min_y = max(0, min_y - pad)
+            max_x = min(img.shape[1], max_x + pad)
+            max_y = min(img.shape[0], max_y + pad)
 
-    # Add the massive failure warning banner at the top
-    banner_height = 80
-    banner = np.zeros((banner_height, collage.shape[1], 3), dtype=np.uint8)
-    banner[:] = (0, 0, 150)  # Dark Red background
+            # Draw a highly visible target box (Neon Green) WITH Anti-Aliasing
+            cv2.rectangle(img, (min_x, min_y), (max_x, max_y), (0, 255, 0), 4, cv2.LINE_AA)
 
-    warning_text = f"OUTLIER DETECTED (ID: {tid[-4:]} | Frame: {fail_frame})  -->  Max Extension: {max_extension:.1f} DEG  |  Mean Variance: {mean_variance:.1f} DEG"
-    cv2.putText(banner, warning_text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            # Add a clean label directly above the person WITH Anti-Aliasing
+            label = f"OUTLIER: {tid[-4:]}"
+            cv2.putText(img, label, (min_x, max(40, min_y - 20)), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 255, 0), 4,
+                        cv2.LINE_AA)
 
-    final_img = np.vstack((banner, collage))
+        # Add simple camera label in the corner WITH Anti-Aliasing
+        cv2.putText(img, cam, (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (255, 255, 255), 5, cv2.LINE_AA)
 
-    out_path = os.path.join(output_dir, f"outlier_proof_{tid[-4:]}_frame_{fail_frame}.jpg")
-    cv2.imwrite(out_path, final_img)
+        # Resize to the new higher-res panel dimensions
+        panels.append(cv2.resize(img, (PANEL_W, PANEL_H), interpolation=cv2.INTER_AREA))
+
+    # Assemble clean Side-by-Side Collage (1x2) - NO BANNER
+    collage = np.hstack((panels[0], panels[1]))
+
+    # Save the file as PNG (lossless) instead of JPG to prevent compression artifacts around text
+    filename = f"outlier_{tid[-4:]}_frame_{fail_frame}_ext_{max_extension:.1f}_var_{mean_variance:.1f}.png"
+    out_path = os.path.join(output_dir, filename)
+    cv2.imwrite(out_path, collage)
