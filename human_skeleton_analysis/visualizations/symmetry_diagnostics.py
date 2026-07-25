@@ -5,6 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import cv2
+import seaborn as sns
 
 
 def save_figure(fig, path):
@@ -172,3 +173,39 @@ def generate_gait_symmetry_video(tid, onset_frame, times, theta_1_list, theta_2_
     if writer is not None:
         writer.release()
     print(f"     -> Video saved: {video_path}")
+
+
+
+def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_dir):
+    """
+    Generates a high-quality distribution plot of the leg extension angles
+    for the thesis, marking the Constraint A threshold.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Use seaborn for a smooth kernel density estimate (KDE) and histogram
+    sns.histplot(all_theta_l, color="blue", label="Left Leg (\u03B8_L)", kde=True, stat="density", alpha=0.4, bins=30,
+                 ax=ax)
+    sns.histplot(all_theta_r, color="orange", label="Right Leg (\u03B8_R)", kde=True, stat="density", alpha=0.4,
+                 bins=30, ax=ax)
+
+    # Add the threshold line
+    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5,
+               label=f"Constraint A Threshold ({threshold}\u00B0)")
+
+    # Formatting for thesis quality
+    ax.set_xlabel("Absolute Angle Relative to Vertical Spine Vector [Degrees]", fontsize=12)
+    ax.set_ylabel("Density", fontsize=12)
+    ax.legend(loc="upper right", fontsize=11)
+    ax.grid(True, linestyle=":", alpha=0.6)
+
+    # Save PNG and SVG
+    png_path = Path(output_dir) / "constraint_A_distribution.png"
+    svg_path = Path(output_dir) / "constraint_A_distribution.svg"
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    fig.savefig(svg_path, format="svg", bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"     -> Saved Distribution Plots to {output_dir}")
