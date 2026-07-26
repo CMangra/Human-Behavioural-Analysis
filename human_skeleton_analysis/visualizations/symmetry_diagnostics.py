@@ -9,25 +9,16 @@ import seaborn as sns
 
 
 def save_figure(fig, base_path):
-    """Saves both high-res PNG and scalable SVG formats."""
     fig.savefig(f"{base_path}.png", dpi=300, bbox_inches="tight")
     fig.savefig(f"{base_path}.svg", format="svg", bbox_inches="tight")
     plt.close(fig)
 
 
 def map_to_matplotlib_coords(joints):
-    """
-    Maps SMPL coordinates to Matplotlib 3D coordinates.
-    Based on visual diagnostics:
-    - Column 0 is lateral (X)
-    - Column 1 is depth (Y)
-    - Column 2 is vertical, but inverted (Z)
-    """
     j_mapped = np.zeros_like(joints)
-    j_mapped[:, 0] = joints[:, 0]  # X stays X
-    j_mapped[:, 1] = joints[:, 1]  # Y stays Y (Depth)
-    j_mapped[:, 2] = -joints[:, 2]  # Invert Z (Flips feet from ceiling to floor)
-
+    j_mapped[:, 0] = joints[:, 0]
+    j_mapped[:, 1] = joints[:, 1]
+    j_mapped[:, 2] = -joints[:, 2]
     return j_mapped
 
 
@@ -35,12 +26,7 @@ def plot_gait_symmetry_diagnostics(tid, times, theta_1_list, theta_2_list, diff_
     short_id = tid[-4:]
     os.makedirs(output_dir, exist_ok=True)
 
-    # ---------------------------------------------------------
-    # PLOT 1: The Biomechanical Time-Series
-    # ---------------------------------------------------------
     fig_ts, ax_ts = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-
-    # Removed title as requested
 
     ax_ts[0].plot(times, theta_1_list, label="Left Leg Angle (\u03B8L)", color="blue", linewidth=2)
     ax_ts[0].plot(times, theta_2_list, label="Right Leg Angle (\u03B8R)", color="orange", linewidth=2)
@@ -57,51 +43,36 @@ def plot_gait_symmetry_diagnostics(tid, times, theta_1_list, theta_2_list, diff_
     ax_ts[1].legend()
     ax_ts[1].grid(True, linestyle=":", alpha=0.7)
 
-    ts_path = Path(output_dir) / f"gait_timeseries_{short_id}"
-    save_figure(fig_ts, ts_path)
+    save_figure(fig_ts, Path(output_dir) / f"gait_timeseries_{short_id}")
 
-    # ---------------------------------------------------------
-    # PLOT 2: The 3D Skeleton Prover
-    # ---------------------------------------------------------
     fig_3d = plt.figure(figsize=(10, 10))
     ax_3d = fig_3d.add_subplot(111, projection='3d')
-
-    # Removed Title as requested
 
     PELVIS, L_HIP, R_HIP, L_KNEE, R_KNEE, NECK = 0, 1, 2, 4, 5, 12
     HEAD, L_SHOULDER, R_SHOULDER = 15, 16, 17
 
-    # Map coordinates so it stands upright
     j = map_to_matplotlib_coords(sample_joints)
     xs, ys, zs = j[:, 0], j[:, 1], j[:, 2]
 
-    # Standard SMPL 24-joint kinematic tree
     SMPL_BONES = [
         (0, 1), (0, 2), (0, 3), (1, 4), (4, 7), (7, 10), (2, 5), (5, 8), (8, 11),
         (3, 6), (6, 9), (9, 12), (12, 15), (12, 13), (13, 16), (16, 18), (18, 20),
         (20, 22), (12, 14), (14, 17), (17, 19), (19, 21), (21, 23)
     ]
 
-    # Draw the background skeleton bones so the human form is visible
     for bone in SMPL_BONES:
-        ax_3d.plot([xs[bone[0]], xs[bone[1]]],
-                   [ys[bone[0]], ys[bone[1]]],
-                   [zs[bone[0]], zs[bone[1]]],
-                   color='gray', linewidth=1.5, alpha=0.6)
+        ax_3d.plot([xs[bone[0]], xs[bone[1]]], [ys[bone[0]], ys[bone[1]]], [zs[bone[0]], zs[bone[1]]], color='gray',
+                   linewidth=1.5, alpha=0.6)
 
-    # Plot all 24 joints clearly
     ax_3d.scatter(xs, ys, zs, c='black', s=25, alpha=0.8)
 
-    # Highlight Gait Joints (Red)
     gait_indices = [PELVIS, L_HIP, R_HIP, L_KNEE, R_KNEE, NECK]
     ax_3d.scatter(xs[gait_indices], ys[gait_indices], zs[gait_indices], c='red', s=50, zorder=5)
 
-    # Highlight Orientation Joints (Purple)
     orient_indices = [HEAD, L_SHOULDER, R_SHOULDER]
     ax_3d.scatter(xs[orient_indices], ys[orient_indices], zs[orient_indices], c='purple', s=50, zorder=5,
                   label="Head & Shoulder Orientation Joints")
 
-    # Draw and Label the Mathematical Vectors (using LaTeX math labels)
     ax_3d.plot([j[PELVIS, 0], j[NECK, 0]], [j[PELVIS, 1], j[NECK, 1]], [j[PELVIS, 2], j[NECK, 2]], 'k--', linewidth=3,
                label=r"Spine Vector ($\vec{V}_{spine}$)", zorder=4)
     ax_3d.plot([j[L_HIP, 0], j[L_KNEE, 0]], [j[L_HIP, 1], j[L_KNEE, 1]], [j[L_HIP, 2], j[L_KNEE, 2]], 'b-', linewidth=3,
@@ -109,18 +80,14 @@ def plot_gait_symmetry_diagnostics(tid, times, theta_1_list, theta_2_list, diff_
     ax_3d.plot([j[R_HIP, 0], j[R_KNEE, 0]], [j[R_HIP, 1], j[R_KNEE, 1]], [j[R_HIP, 2], j[R_KNEE, 2]], 'r-', linewidth=3,
                label=r"Right Thigh Vector ($\vec{V}_{R\_leg}$)", zorder=4)
 
-    # Annotate ALL joint indices
     for idx in range(len(xs)):
         if idx in gait_indices:
-            # Gait joints: Red, Bold
             ax_3d.text(xs[idx], ys[idx], zs[idx] + 0.04, f"{idx}", color='red', fontsize=12, fontweight='bold',
                        zorder=6)
         elif idx in orient_indices:
-            # Orientation joints: Purple, Bold
             ax_3d.text(xs[idx], ys[idx], zs[idx] + 0.04, f"{idx}", color='purple', fontsize=12, fontweight='bold',
                        zorder=6)
         else:
-            # Secondary joints: Small, unobtrusive
             ax_3d.text(xs[idx], ys[idx], zs[idx] + 0.03, f"{idx}", color='black', fontsize=7, zorder=6)
 
     ax_3d.legend()
@@ -131,8 +98,71 @@ def plot_gait_symmetry_diagnostics(tid, times, theta_1_list, theta_2_list, diff_
     ax_3d.set_ylim(mid_y - max_range, mid_y + max_range)
     ax_3d.set_zlim(mid_z - max_range, mid_z + max_range)
 
-    skel_path = Path(output_dir) / f"gait_skeleton_proof_{short_id}"
-    save_figure(fig_3d, skel_path)
+    save_figure(fig_3d, Path(output_dir) / f"gait_skeleton_proof_{short_id}")
+
+
+# --- NEW: SENSOR FUSION FOOT CONTACT PLOTS ---
+
+def plot_foot_contact_diagnostics(tid, times, l_foot_zs, r_foot_zs, ground_zs, output_dir):
+    """Plots the relationship between the 3D SMPL feet and the LiDAR Ground Plane over time."""
+    short_id = tid[-4:]
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    ax.plot(times, l_foot_zs, label="Left Foot Height", color="blue", linewidth=2)
+    ax.plot(times, r_foot_zs, label="Right Foot Height", color="orange", linewidth=2)
+    ax.plot(times, ground_zs, label="LiDAR Ground Plane", color="green", linestyle="--", linewidth=3)
+
+    ax.set_ylabel("Height [m]")
+    ax.set_xlabel("Time relative to turn onset [s]")
+    ax.axvline(0, color="black", linestyle="--", alpha=0.5, label="Turn Onset")
+
+    ax.legend(loc="upper right")
+    ax.grid(True, linestyle=":", alpha=0.7)
+
+    save_figure(fig, Path(output_dir) / f"gait_foot_contact_{short_id}")
+
+
+def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(all_theta_l, color="blue", label="Left Leg (\u03B8_L)", kde=True, stat="count", alpha=0.4, bins=30,
+                 ax=ax)
+    sns.histplot(all_theta_r, color="orange", label="Right Leg (\u03B8_R)", kde=True, stat="count", alpha=0.4, bins=30,
+                 ax=ax)
+    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5,
+               label=f"Constraint A Threshold ({threshold}\u00B0)")
+    ax.set_xlabel("Absolute Angle Relative to Vertical Spine Vector [Degrees]", fontsize=12)
+    ax.set_ylabel("Count (Number of Poses)", fontsize=12)
+    ax.legend(loc="upper right", fontsize=11)
+    ax.grid(True, linestyle=":", alpha=0.6)
+    save_figure(fig, Path(output_dir) / "global_constraint_A_distribution")
+
+
+def plot_symmetry_variance_distribution(all_mean_variances, threshold, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(all_mean_variances, color="purple", kde=True, stat="count", alpha=0.4, bins=15, ax=ax)
+    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5, label=f"Upper Bound (+{threshold}\u00B0)")
+    ax.axvline(-threshold, color='red', linestyle='--', linewidth=2.5, label=f"Lower Bound (-{threshold}\u00B0)")
+    ax.set_xlabel("Sequence Mean Symmetry Variance [Degrees]", fontsize=12)
+    ax.set_ylabel("Count (Number of Sequences)", fontsize=12)
+    ax.legend(loc="upper right", fontsize=11)
+    ax.grid(True, linestyle=":", alpha=0.6)
+    save_figure(fig, Path(output_dir) / "global_constraint_B_distribution")
+
+
+def plot_foot_error_distribution(all_foot_errors, threshold, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(all_foot_errors, color="green", kde=True, stat="count", alpha=0.4, bins=15, ax=ax)
+    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5, label=f"Constraint C Threshold ({threshold}m)")
+    ax.set_xlabel("Sequence Mean Foot-Ground Error [Meters]", fontsize=12)
+    ax.set_ylabel("Count (Number of Sequences)", fontsize=12)
+    ax.legend(loc="upper right", fontsize=11)
+    ax.grid(True, linestyle=":", alpha=0.6)
+    save_figure(fig, Path(output_dir) / "global_constraint_C_distribution")
 
 
 def generate_gait_symmetry_video(tid, onset_frame, times, theta_1_list, theta_2_list, diff_list, joints_list,
@@ -215,64 +245,3 @@ def generate_gait_symmetry_video(tid, onset_frame, times, theta_1_list, theta_2_
     if writer is not None:
         writer.release()
     print(f"     -> Video saved: {video_path}")
-
-
-def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_dir):
-    """
-    Generates a high-quality distribution plot of the leg extension angles
-    for the thesis, marking the Constraint A threshold.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Use stat="count" instead of "density"
-    sns.histplot(all_theta_l, color="blue", label="Left Leg (\u03B8_L)", kde=True, stat="count", alpha=0.4, bins=30,
-                 ax=ax)
-    sns.histplot(all_theta_r, color="orange", label="Right Leg (\u03B8_R)", kde=True, stat="count", alpha=0.4, bins=30,
-                 ax=ax)
-
-    # Add the threshold line
-    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5,
-               label=f"Constraint A Threshold ({threshold}\u00B0)")
-
-    # Formatting for thesis quality
-    ax.set_xlabel("Absolute Angle Relative to Vertical Spine Vector [Degrees]", fontsize=12)
-    ax.set_ylabel("Count (Number of Poses)", fontsize=12)
-    ax.legend(loc="upper right", fontsize=11)
-    ax.grid(True, linestyle=":", alpha=0.6)
-
-    # Save PNG and SVG
-    png_path = Path(output_dir) / "global_constraint_A_distribution"
-    save_figure(fig, png_path)
-
-    print(f"     -> Saved Global Distribution Plot A to {output_dir}")
-
-
-def plot_symmetry_variance_distribution(all_mean_variances, threshold, output_dir):
-    """
-    Generates a high-quality distribution plot of the Mean Symmetry Variance (Constraint B)
-    across all sequences for the thesis, marking the positive and negative thresholds.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Use stat="count" instead of "density"
-    sns.histplot(all_mean_variances, color="purple", kde=True, stat="count", alpha=0.4, bins=15, ax=ax)
-
-    # Add the threshold lines (positive and negative bounds)
-    ax.axvline(threshold, color='red', linestyle='--', linewidth=2.5, label=f"Upper Bound (+{threshold}\u00B0)")
-    ax.axvline(-threshold, color='red', linestyle='--', linewidth=2.5, label=f"Lower Bound (-{threshold}\u00B0)")
-
-    # Formatting (No title as requested)
-    ax.set_xlabel("Sequence Mean Symmetry Variance [Degrees]", fontsize=12)
-    ax.set_ylabel("Count (Number of Sequences)", fontsize=12)
-    ax.legend(loc="upper right", fontsize=11)
-    ax.grid(True, linestyle=":", alpha=0.6)
-
-    # Save PNG and SVG
-    png_path = Path(output_dir) / "global_constraint_B_distribution"
-    save_figure(fig, png_path)
-
-    print(f"     -> Saved Global Constraint B Distribution Plot to {output_dir}")
