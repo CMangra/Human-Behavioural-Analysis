@@ -8,8 +8,10 @@ import cv2
 import seaborn as sns
 
 
-def save_figure(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+def save_figure(fig, base_path):
+    """Saves both high-res PNG and scalable SVG formats."""
+    fig.savefig(f"{base_path}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(f"{base_path}.svg", format="svg", bbox_inches="tight")
     plt.close(fig)
 
 
@@ -37,49 +39,89 @@ def plot_gait_symmetry_diagnostics(tid, times, theta_1_list, theta_2_list, diff_
     # PLOT 1: The Biomechanical Time-Series
     # ---------------------------------------------------------
     fig_ts, ax_ts = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    fig_ts.suptitle(f"Biomechanical Gait Symmetry Analysis | Pedestrian {short_id}", fontsize=14)
 
-    ax_ts[0].plot(times, theta_1_list, label="Left Leg Angle (\u03B81)", color="blue", linewidth=2)
-    ax_ts[0].plot(times, theta_2_list, label="Right Leg Angle (\u03B82)", color="orange", linewidth=2)
+    # Removed title as requested
+
+    ax_ts[0].plot(times, theta_1_list, label="Left Leg Angle (\u03B8L)", color="blue", linewidth=2)
+    ax_ts[0].plot(times, theta_2_list, label="Right Leg Angle (\u03B8R)", color="orange", linewidth=2)
     ax_ts[0].set_ylabel("Angle from Center [deg]")
-    ax_ts[0].set_title("Oscillation of Legs During Walking Cycle")
     ax_ts[0].axvline(0, color="green", linestyle="--", label="Turn Onset")
     ax_ts[0].legend()
     ax_ts[0].grid(True, linestyle=":", alpha=0.7)
 
-    ax_ts[1].plot(times, diff_list, label="|\u03B81| - |\u03B82| (Symmetry Delta)", color="red", linewidth=2)
+    ax_ts[1].plot(times, diff_list, label="|\u03B8L| - |\u03B8R| (Symmetry Delta)", color="red", linewidth=2)
     ax_ts[1].axhline(0, color="black", linewidth=1)
     ax_ts[1].axvline(0, color="green", linestyle="--")
     ax_ts[1].set_ylabel("Symmetry Difference [deg]")
     ax_ts[1].set_xlabel("Time relative to onset [s]")
-    ax_ts[1].set_title("Symmetry Variance (Outlier Detection Metric)")
     ax_ts[1].legend()
     ax_ts[1].grid(True, linestyle=":", alpha=0.7)
 
-    ts_path = Path(output_dir) / f"gait_timeseries_{short_id}.png"
+    ts_path = Path(output_dir) / f"gait_timeseries_{short_id}"
     save_figure(fig_ts, ts_path)
 
     # ---------------------------------------------------------
     # PLOT 2: The 3D Skeleton Prover
     # ---------------------------------------------------------
-    fig_3d = plt.figure(figsize=(8, 8))
+    fig_3d = plt.figure(figsize=(10, 10))
     ax_3d = fig_3d.add_subplot(111, projection='3d')
-    ax_3d.set_title(f"3D Structural Math Proof | Frame at Turn Onset\nCenter Line vs. Leg Vectors")
+
+    # Removed Title as requested
 
     PELVIS, L_HIP, R_HIP, L_KNEE, R_KNEE, NECK = 0, 1, 2, 4, 5, 12
+    HEAD, L_SHOULDER, R_SHOULDER = 15, 16, 17
 
     # Map coordinates so it stands upright
     j = map_to_matplotlib_coords(sample_joints)
     xs, ys, zs = j[:, 0], j[:, 1], j[:, 2]
 
-    ax_3d.scatter(xs, ys, zs, c='black', s=20)
+    # Standard SMPL 24-joint kinematic tree
+    SMPL_BONES = [
+        (0, 1), (0, 2), (0, 3), (1, 4), (4, 7), (7, 10), (2, 5), (5, 8), (8, 11),
+        (3, 6), (6, 9), (9, 12), (12, 15), (12, 13), (13, 16), (16, 18), (18, 20),
+        (20, 22), (12, 14), (14, 17), (17, 19), (19, 21), (21, 23)
+    ]
+
+    # Draw the background skeleton bones so the human form is visible
+    for bone in SMPL_BONES:
+        ax_3d.plot([xs[bone[0]], xs[bone[1]]],
+                   [ys[bone[0]], ys[bone[1]]],
+                   [zs[bone[0]], zs[bone[1]]],
+                   color='gray', linewidth=1.5, alpha=0.6)
+
+    # Plot all 24 joints clearly
+    ax_3d.scatter(xs, ys, zs, c='black', s=25, alpha=0.8)
+
+    # Highlight Gait Joints (Red)
+    gait_indices = [PELVIS, L_HIP, R_HIP, L_KNEE, R_KNEE, NECK]
+    ax_3d.scatter(xs[gait_indices], ys[gait_indices], zs[gait_indices], c='red', s=50, zorder=5)
+
+    # Highlight Orientation Joints (Purple)
+    orient_indices = [HEAD, L_SHOULDER, R_SHOULDER]
+    ax_3d.scatter(xs[orient_indices], ys[orient_indices], zs[orient_indices], c='purple', s=50, zorder=5,
+                  label="Head & Shoulder Orientation Joints")
+
+    # Draw and Label the Mathematical Vectors (using LaTeX math labels)
     ax_3d.plot([j[PELVIS, 0], j[NECK, 0]], [j[PELVIS, 1], j[NECK, 1]], [j[PELVIS, 2], j[NECK, 2]], 'k--', linewidth=3,
-               label="Center Line")
+               label=r"Spine Vector ($\vec{V}_{spine}$)", zorder=4)
     ax_3d.plot([j[L_HIP, 0], j[L_KNEE, 0]], [j[L_HIP, 1], j[L_KNEE, 1]], [j[L_HIP, 2], j[L_KNEE, 2]], 'b-', linewidth=3,
-               label="Left Thigh")
+               label=r"Left Thigh Vector ($\vec{V}_{L\_leg}$)", zorder=4)
     ax_3d.plot([j[R_HIP, 0], j[R_KNEE, 0]], [j[R_HIP, 1], j[R_KNEE, 1]], [j[R_HIP, 2], j[R_KNEE, 2]], 'r-', linewidth=3,
-               label="Right Thigh")
-    ax_3d.plot([j[L_HIP, 0], j[R_HIP, 0]], [j[L_HIP, 1], j[R_HIP, 1]], [j[L_HIP, 2], j[R_HIP, 2]], 'gray', linewidth=2)
+               label=r"Right Thigh Vector ($\vec{V}_{R\_leg}$)", zorder=4)
+
+    # Annotate ALL joint indices
+    for idx in range(len(xs)):
+        if idx in gait_indices:
+            # Gait joints: Red, Bold
+            ax_3d.text(xs[idx], ys[idx], zs[idx] + 0.04, f"{idx}", color='red', fontsize=12, fontweight='bold',
+                       zorder=6)
+        elif idx in orient_indices:
+            # Orientation joints: Purple, Bold
+            ax_3d.text(xs[idx], ys[idx], zs[idx] + 0.04, f"{idx}", color='purple', fontsize=12, fontweight='bold',
+                       zorder=6)
+        else:
+            # Secondary joints: Small, unobtrusive
+            ax_3d.text(xs[idx], ys[idx], zs[idx] + 0.03, f"{idx}", color='black', fontsize=7, zorder=6)
 
     ax_3d.legend()
 
@@ -89,7 +131,7 @@ def plot_gait_symmetry_diagnostics(tid, times, theta_1_list, theta_2_list, diff_
     ax_3d.set_ylim(mid_y - max_range, mid_y + max_range)
     ax_3d.set_zlim(mid_z - max_range, mid_z + max_range)
 
-    skel_path = Path(output_dir) / f"gait_skeleton_proof_{short_id}.png"
+    skel_path = Path(output_dir) / f"gait_skeleton_proof_{short_id}"
     save_figure(fig_3d, skel_path)
 
 
@@ -201,11 +243,8 @@ def plot_leg_extension_distribution(all_theta_l, all_theta_r, threshold, output_
     ax.grid(True, linestyle=":", alpha=0.6)
 
     # Save PNG and SVG
-    png_path = Path(output_dir) / "global_constraint_A_distribution.png"
-    svg_path = Path(output_dir) / "global_constraint_A_distribution.svg"
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(svg_path, format="svg", bbox_inches="tight")
-    plt.close(fig)
+    png_path = Path(output_dir) / "global_constraint_A_distribution"
+    save_figure(fig, png_path)
 
     print(f"     -> Saved Global Distribution Plot A to {output_dir}")
 
@@ -233,10 +272,7 @@ def plot_symmetry_variance_distribution(all_mean_variances, threshold, output_di
     ax.grid(True, linestyle=":", alpha=0.6)
 
     # Save PNG and SVG
-    png_path = Path(output_dir) / "global_constraint_B_distribution.png"
-    svg_path = Path(output_dir) / "global_constraint_B_distribution.svg"
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(svg_path, format="svg", bbox_inches="tight")
-    plt.close(fig)
+    png_path = Path(output_dir) / "global_constraint_B_distribution"
+    save_figure(fig, png_path)
 
     print(f"     -> Saved Global Constraint B Distribution Plot to {output_dir}")
