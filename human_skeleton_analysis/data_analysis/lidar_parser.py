@@ -9,7 +9,7 @@ def extract_3d_trajectories(data_dir, sequence):
     """
     Scans segmented PLY files and builds 2D (X,Y) trajectories per pedestrian
     by calculating the centroid of their 3D point cloud.
-    Also extracts the Z-axis limits to establish the LiDAR ground plane.
+    It also extracts the Z-axis limits to establish the LiDAR ground plane.
     """
     lidar_dir = os.path.join(data_dir, 'labels', '3d', 'segment', sequence)
     ply_files = sorted(glob.glob(os.path.join(lidar_dir, '*.ply')))
@@ -24,14 +24,17 @@ def extract_3d_trajectories(data_dir, sequence):
         tid = parts[-1].split('.')[0]
 
         try:
+            # Load point cloud without processing the strict PLY headers
             pcd = trimesh.load(ply_path, process=False)
             pts = np.array(pcd.vertices)
 
+            # Ignore noise/ghosts with less than 5 points
             if len(pts) > 5:
+                # Calculate X/Y centroid for 2D tracking
                 centroid_x = np.mean(pts[:, 0])
                 centroid_y = np.mean(pts[:, 1])
 
-                # Extract Z bounds. Assuming +Z points downwards, max_z is the floor.
+                # Extract Z bounds. Assuming +Z points downwards in PedX, max_z is the floor.
                 min_z = np.min(pts[:, 2])
                 max_z = np.max(pts[:, 2])
 

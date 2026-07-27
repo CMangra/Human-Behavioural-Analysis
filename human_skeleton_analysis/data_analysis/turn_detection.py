@@ -2,16 +2,18 @@ import numpy as np
 from scipy.signal import find_peaks
 import config
 
+
 def smooth_data(data, window):
     pad_size = window // 2
     padded_data = np.pad(data, (pad_size, pad_size), mode='edge')
     return np.convolve(padded_data, np.ones(window) / window, mode='valid')
 
+
 def compute_kinematics(frames_dict):
     sorted_frames = sorted(frames_dict.keys())
     if len(sorted_frames) < 30: return None
 
-    # Unpack the 4-tuple from lidar_parser
+    # Unpack all 4 values from the updated lidar_parser
     raw_xs = [frames_dict[f][0] for f in sorted_frames]
     raw_ys = [frames_dict[f][1] for f in sorted_frames]
     min_zs = [frames_dict[f][2] for f in sorted_frames]
@@ -57,12 +59,13 @@ def compute_kinematics(frames_dict):
         "sorted_frames": sorted_frames,
         "xs": xs,
         "ys": ys,
-        "min_zs": min_zs,
-        "max_zs": max_zs,
+        "min_zs": min_zs,   # Added Z bounds
+        "max_zs": max_zs,   # Added Z bounds
         "smoothed_ang_vel": smoothed_ang_vel,
         "peaks": peaks,
         "onset_indices": onset_indices
     }
+
 
 def detect_multiple_turns_with_onset(trajectories):
     print("\n[DATA_ANALYSIS] Applying centralized kinematic math to qualified trajectories...")
